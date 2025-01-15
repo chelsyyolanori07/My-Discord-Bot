@@ -1,0 +1,28 @@
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Log files
+*.log
+
+# Environment files
+.env
+
+# Other common ignores (adjust as needed)
+node_modules/
+dist/
+build/
+*.swp
+*.swo
+*.idea/  # IntelliJ IDEA
+.vscode/ # VS Code".env" 
