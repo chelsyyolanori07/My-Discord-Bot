@@ -7,6 +7,7 @@ import asyncio
 import random
 from PIL import Image, ImageDraw, ImageFont
 from collections import defaultdict
+from discord.ext import tasks
 
 # Load environment variables from .env file
 load_dotenv()
@@ -19,36 +20,88 @@ intents.voice_states = True #To track voice channel events
 intents.members = True #Required to fetch user information
 bot = commands.Bot(command_prefix='/', intents=intents)
 
+# Dictionary to store user-specific timers
+user_timers = {}
+
 # 1. Pomodoro Timer Command
-# Pomodoro Timer Command
 @bot.tree.command(name='pomodoro', description='Start a Pomodoro timer with custom durations.')
 async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 25, break_minutes: int = 5):
     """
-    Start a Pomodoro timer.
-    Example Usage:
-    - /pomodoro → Starts a timer with default durations (25 minutes work, 5 minutes break).
-    - /pomodoro 40 10 → Starts a timer with 40 minutes work and 10 minutes break.
-    - /pomodoro 30 15 → Starts a timer with 30 minutes work and 15 minutes break.
-
-    Parameters:
-    - work_minutes: Duration of work in minutes (default is 25).
-    - break_minutes: Duration of the break in minutes (default is 5).
+    Start a Pomodoro timer with a visual progress bar inside an embed.
     """
+    user_id = interaction.user.id
+
     # Validate user inputs
     if work_minutes <= 0 or break_minutes <= 0:
         await interaction.response.send_message("Please enter positive numbers for work and break minutes.")
         return
-    # Notify the user that the Pomodoro timer has started
-    await interaction.response.send_message(
-        f"Pomodoro timer started! Work for {work_minutes} minutes. I'll notify you when time's up!"
-    )
 
-    # Work period
-    await asyncio.sleep(work_minutes * 60)
-    await interaction.followup.send("Time's up! Take a break!")
-    # Break period
-    await asyncio.sleep(break_minutes * 60)
-    await interaction.followup.send("Break's over! Time to focus again!")
+    # Notify the user that the timer has started
+    embed = discord.Embed(
+        title="Pomodoro Timer",
+        description=f"Work for {work_minutes} minutes. Progress updates will follow.",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="Pomodoro Timer in progress")
+
+    # Ensure Interaction is Deferred
+    await interaction.response.defer()
+
+    message = await interaction.followup.send(embed=embed, wait=True)  # Send the initial embed message and store the response
+
+    total_time = work_minutes * 60  # Total time in seconds
+    bar_length = 20  # Length of the progress bar
+
+    async def update_progress_embed(remaining_time):
+        minutes, seconds = divmod(remaining_time, 60)
+        elapsed_time = (work_minutes * 60) - remaining_time
+        progress = elapsed_time / (work_minutes * 60)
+        filled_length = int(bar_length * progress)
+        bar = "█" * filled_length + "–" * (bar_length - filled_length)
+
+        embed.description = f"Timer: [{bar}] {minutes:02d}:{seconds:02d}\nWork for {work_minutes} minutes."
+        await message.edit(embed=embed)
+
+    async def start_pomodoro_timer():
+        nonlocal total_time
+
+        while total_time > 0:
+            await update_progress_embed(total_time)
+            await asyncio.sleep(1)
+            total_time -= 1
+
+        # Timer complete
+        embed.title = "Pomodoro Timer Complete!"
+        embed.description = "Time's up! Take a break!"
+        embed.color = discord.Color.green()
+        await message.edit(embed=embed)  # Update embed to show completion
+
+        # Remove the timer for the user once it completes
+        if user_id in user_timers:
+            del user_timers[user_id]
+
+    # Cancel any existing timer for the user before starting a new one
+    if user_id in user_timers and user_timers[user_id] is not None:
+        user_timers[user_id].cancel()
+
+    user_timers[user_id] = asyncio.create_task(start_pomodoro_timer())
+
+# Stop Timer Command
+@bot.tree.command(name='stop_timer', description='Stop the Pomodoro timer if it is running.')
+async def stop_timer(interaction: discord.Interaction):
+    user_id = interaction.user.id
+
+    if user_id in user_timers and user_timers[user_id] is not None:
+        user_timers[user_id].cancel()
+        user_timers[user_id] = None
+        embed = discord.Embed(
+            title="Pomodoro Timer Stopped",
+            description="The timer has been stopped successfully.",
+            color=discord.Color.blue()
+        )
+        await interaction.response.send_message(embed=embed)
+    else:
+        await interaction.response.send_message("No timer is currently running.")
 
 # 2. To-Do List Commands
 # Dictionary to store tasks uniquely for each user
