@@ -105,41 +105,65 @@ async def stop_timer(interaction: discord.Interaction):
 
 # 2. To-Do List Commands
 # Dictionary to store tasks uniquely for each user
-to_do_list = {}
+to_do_list = defaultdict(list)
 
 @bot.tree.command(name='add_task', description='Add a task to your to-do list')
 async def add_task_slash(interaction: discord.Interaction, task: str):
     """Adds a task to the user's personal to-do list."""
     user_id = str(interaction.user.id)  # Use the user's ID as a unique key
-    if user_id not in to_do_list:
-        to_do_list[user_id] = []  # Initialize an empty list for the user if not present
-    to_do_list[user_id].append(task)  # Add the task to the user's list
-    await interaction.response.send_message(f"Added task: '{task}' to your to-do list!")
+    tasks = task.split(',')  # Split the input string into multiple tasks by commas
+    for task in tasks:
+        to_do_list[user_id].append((task.strip(), False))
+    embed = discord.Embed(title="To-Do List Update", description=f"Added tasks: {', '.join(task[0] for task in to_do_list[user_id])} to your to-do list!", color=discord.Color.blue())
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name='show_tasks', description='Show all tasks in your to-do list')
 async def show_tasks_slash(interaction: discord.Interaction):
     """Shows all tasks in the user's personal to-do list."""
     user_id = str(interaction.user.id)
     if user_id not in to_do_list or not to_do_list[user_id]:
-        await interaction.response.send_message("Your to-do list is empty!")
+        embed = discord.Embed(title="To-Do List", description="Your to-do list is empty!", color=discord.Color.blue())
     else:
+        # Calculate the percentage of completed tasks
+        total_tasks = len(to_do_list[user_id])
+        completed_tasks = sum(1 for task in to_do_list[user_id] if task[1])
+        completion_percentage = (completed_tasks / total_tasks) * 100
+
         # Format the task list for display
-        tasks_list = "\n".join([f"{i + 1}. {task}" for i, task in enumerate(to_do_list[user_id])])
-        await interaction.response.send_message(f"Your to-do list:\n{tasks_list}")
+        tasks_list = "\n".join([f"{i + 1}. {task[0]} {'✅' if task[1] else ''}" for i, task in enumerate(to_do_list[user_id])])
+        embed = discord.Embed(title="To-Do List", description=f"Your to-do list:\n{tasks_list}\n\n**Completion: {completion_percentage:.2f}%**", color=discord.Color.blue())
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="remove_task", description="Remove a task by its number.")
 async def remove_task_slash(interaction: discord.Interaction, index: int):
     user_id = str(interaction.user.id)
     try:
         if user_id not in to_do_list or not (1 <= index <= len(to_do_list[user_id])):
-            await interaction.response.send_message("Invalid task number! Make sure the number is within the range of your tasks.")
-            return # Important to return here to avoid further execution
-        removed_task = to_do_list[user_id].pop(index - 1)
-        await interaction.response.send_message(f"Removed task: '{removed_task}'")
-    except IndexError: # Handle index errors specifically
-        await interaction.response.send_message("Invalid task number! Make sure the number is within the range of your tasks.")
-    except ValueError: # Handle if the user inputs something that is not an integer
-        await interaction.response.send_message("Please enter a valid integer for the task index.")
+            embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
+        else:
+            removed_task = to_do_list[user_id].pop(index - 1)
+            embed = discord.Embed(title="To-Do List Update", description=f"Removed task: '{removed_task[0]}' {'✅' if removed_task[1] else ''}", color=discord.Color.blue())
+    except IndexError:
+        embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
+    except ValueError:
+        embed = discord.Embed(title="Error", description="Please enter a valid integer for the task index.", color=discord.Color.red())
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name='mark_task_done', description='Mark a task as done by its number.')
+async def mark_task_done_slash(interaction: discord.Interaction, index: int):
+    user_id = str(interaction.user.id)
+    try:
+        if user_id not in to_do_list or not (1 <= index <= len(to_do_list[user_id])):
+            embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
+        else:
+            task, _ = to_do_list[user_id][index - 1]
+            to_do_list[user_id][index - 1] = (task, True)
+            embed = discord.Embed(title="To-Do List Update", description=f"Marked task '{task}' as done ✅", color=discord.Color.green())
+    except IndexError:
+        embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
+    except ValueError:
+        embed = discord.Embed(title="Error", description="Please enter a valid integer for the task index.", color=discord.Color.red())
+    await interaction.response.send_message(embed=embed)
 
 # 3. Study Tracker (Dictionary to store user study times)
 study_times = defaultdict(list) #Format: {user_id: total_minutes}
