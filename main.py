@@ -8,6 +8,7 @@ import random
 from PIL import Image, ImageDraw, ImageFont
 from collections import defaultdict
 from discord.ext import tasks
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,9 +27,7 @@ user_timers = {}
 # 1. Pomodoro Timer Command
 @bot.tree.command(name='pomodoro', description='Start a Pomodoro timer with custom durations.')
 async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 25, break_minutes: int = 5):
-    """
-    Start a Pomodoro timer with a visual progress bar inside an embed.
-    """
+    """Start a Pomodoro timer with a visual progress bar inside an embed."""
     user_id = interaction.user.id
 
     # Validate user inputs
@@ -36,55 +35,68 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
         await interaction.response.send_message("Please enter positive numbers for work and break minutes.")
         return
 
-    # Notify the user that the timer has started
+    # Initial embed setup
     embed = discord.Embed(
         title="Pomodoro Timer",
         description=f"Work for {work_minutes} minutes. Progress updates will follow.",
         color=discord.Color.blue()
     )
     embed.set_footer(text="Pomodoro Timer in progress")
-
-    # Ensure Interaction is Deferred
     await interaction.response.defer()
+    work_message = await interaction.followup.send(embed=embed, wait=True)
 
-    message = await interaction.followup.send(embed=embed, wait=True)  # Send the initial embed message and store the response
+    work_time = work_minutes * 60
+    break_time = break_minutes * 60
+    bar_length = 20
 
-    total_time = work_minutes * 60  # Total time in seconds
-    bar_length = 20  # Length of the progress bar
-
-    async def update_progress_embed(remaining_time):
+    async def update_progress_embed(message, remaining_time, total_time, phase):
         minutes, seconds = divmod(remaining_time, 60)
-        elapsed_time = (work_minutes * 60) - remaining_time
-        progress = elapsed_time / (work_minutes * 60)
+        elapsed_time = total_time - remaining_time
+        progress = elapsed_time / total_time
         filled_length = int(bar_length * progress)
         bar = "█" * filled_length + "–" * (bar_length - filled_length)
-
-        embed.description = f"Timer: [{bar}] {minutes:02d}:{seconds:02d}\nWork for {work_minutes} minutes."
+        if phase == 'work':
+            embed.description = f"Work Timer: [{bar}] {minutes:02d}:{seconds:02d}\nWork for {work_minutes} minutes."
+        else:
+            embed.description = f"Break Timer: [{bar}] {minutes:02d}:{seconds:02d}\nTake a break for {break_minutes} minutes."
         await message.edit(embed=embed)
 
-    async def start_pomodoro_timer():
-        nonlocal total_time
+    async def start_timer(message, total_time, phase):
+        start_time = time.monotonic()
+        end_time = start_time + total_time
+        
+        while (remaining_time := int(end_time - time.monotonic())) > 0:
+            await update_progress_embed(message, remaining_time, total_time, phase)
+            await asyncio.sleep(0.5)
 
-        while total_time > 0:
-            await update_progress_embed(total_time)
-            await asyncio.sleep(1)
-            total_time -= 1
+            # Explicitly update the embed for 00:00
+        await update_progress_embed(message, 0, total_time, phase)
 
-        # Timer complete
-        embed.title = "Pomodoro Timer Complete!"
-        embed.description = "Time's up! Take a break!"
-        embed.color = discord.Color.green()
-        await message.edit(embed=embed)  # Update embed to show completion
+        if phase == 'work':
+            # Work timer complete, send a new message for the break timer
+            break_embed = discord.Embed(
+                title="Break Time!",
+                description=f"Get some rest for {break_minutes} minutes. A progress bar will track your break.",
+                color=discord.Color.green()
+            )
+            break_message = await interaction.followup.send(embed=break_embed)
+            await start_timer(break_message, break_time, 'break')  # Start the break timer
+        else:
+            # Break timer complete
+            embed.title = "Pomodoro Session Complete!"
+            embed.description = "You've completed a Pomodoro session! Great job buddy :)"
+            embed.color = discord.Color.green()
+            await message.edit(embed=embed)
 
-        # Remove the timer for the user once it completes
-        if user_id in user_timers:
-            del user_timers[user_id]
+            # Remove the timer for the user
+            if user_id in user_timers:
+                del user_timers[user_id]
 
     # Cancel any existing timer for the user before starting a new one
     if user_id in user_timers and user_timers[user_id] is not None:
         user_timers[user_id].cancel()
 
-    user_timers[user_id] = asyncio.create_task(start_pomodoro_timer())
+    user_timers[user_id] = asyncio.create_task(start_timer(work_message, work_time, 'work'))
 
 # Stop Timer Command
 @bot.tree.command(name='stop_timer', description='Stop the Pomodoro timer if it is running.')
@@ -113,7 +125,7 @@ async def add_task_slash(interaction: discord.Interaction, task: str):
     user_id = str(interaction.user.id)  # Use the user's ID as a unique key
     tasks = task.split(',')  # Split the input string into multiple tasks by commas
     for task in tasks:
-        to_do_list[user_id].append((task.strip(), False))
+        to_do_list[user_id].append((task.strip(), False))  # Add each task to the user's list with a "done" status
     embed = discord.Embed(title="To-Do List Update", description=f"Added tasks: {', '.join(task[0] for task in to_do_list[user_id])} to your to-do list!", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed)
 
@@ -158,7 +170,7 @@ async def mark_task_done_slash(interaction: discord.Interaction, index: int):
         else:
             task, _ = to_do_list[user_id][index - 1]
             to_do_list[user_id][index - 1] = (task, True)
-            embed = discord.Embed(title="To-Do List Update", description=f"Marked task '{task}' as done ✅", color=discord.Color.green())
+            embed = discord.Embed(title="To-Do List Update", description=f"Marked task '{task}' as done ✅. Look at you finishing that task, good luck with your other task :)", color=discord.Color.green())
     except IndexError:
         embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
     except ValueError:
