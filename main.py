@@ -9,6 +9,8 @@ from PIL import Image, ImageDraw, ImageFont
 from collections import defaultdict
 from discord.ext import tasks
 import time
+import io
+from datetime import timezone
 
 # Load environment variables from .env file
 load_dotenv()
@@ -23,12 +25,13 @@ bot = commands.Bot(command_prefix='/', intents=intents)
 
 # Dictionary to store user-specific timers
 user_timers = {}
+pomodoro_times = defaultdict(int)  # Track Pomodoro session times
 
 # 1. Pomodoro Timer Command
 @bot.tree.command(name='pomodoro', description='Start a Pomodoro timer with custom durations.')
 async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 25, break_minutes: int = 5):
     """Start a Pomodoro timer with a visual progress bar inside an embed."""
-    user_id = interaction.user.id
+    user_id = str(interaction.user.id)  # Ensure user_id is a string
 
     # Validate user inputs
     if work_minutes <= 0 or break_minutes <= 0:
@@ -64,12 +67,12 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
     async def start_timer(message, total_time, phase):
         start_time = time.monotonic()
         end_time = start_time + total_time
-        
+
         while (remaining_time := int(end_time - time.monotonic())) > 0:
             await update_progress_embed(message, remaining_time, total_time, phase)
             await asyncio.sleep(0.5)
 
-            # Explicitly update the embed for 00:00
+        # Explicitly update the embed for 00:00
         await update_progress_embed(message, 0, total_time, phase)
 
         if phase == 'work':
@@ -92,6 +95,10 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
             if user_id in user_timers:
                 del user_timers[user_id]
 
+            # Log the completed study time
+            elapsed_minutes = work_minutes  # Only count the work time
+            pomodoro_times[user_id] += elapsed_minutes
+
     # Cancel any existing timer for the user before starting a new one
     if user_id in user_timers and user_timers[user_id] is not None:
         user_timers[user_id].cancel()
@@ -101,7 +108,7 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
 # Stop Timer Command
 @bot.tree.command(name='stop_timer', description='Stop the Pomodoro timer if it is running.')
 async def stop_timer(interaction: discord.Interaction):
-    user_id = interaction.user.id
+    user_id = str(interaction.user.id)  # Ensure user_id is a string
 
     if user_id in user_timers and user_timers[user_id] is not None:
         user_timers[user_id].cancel()
@@ -113,7 +120,12 @@ async def stop_timer(interaction: discord.Interaction):
         )
         await interaction.response.send_message(embed=embed)
     else:
-        await interaction.response.send_message("No timer is currently running.")
+        embed = discord.Embed(
+            title="No Timer Running",
+            description="No timer is currently running.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
 
 # 2. To-Do List Commands
 # Dictionary to store tasks uniquely for each user
@@ -178,11 +190,11 @@ async def mark_task_done_slash(interaction: discord.Interaction, index: int):
     await interaction.response.send_message(embed=embed)
 
 # 3. Study Tracker (Dictionary to store user study times)
-study_times = defaultdict(list) #Format: {user_id: total_minutes}
+study_times = defaultdict(int)  # Format: {user_id: total_minutes}
 voice_channel_start_times = {}
 
-# Weekly Reset Timer
-reset_time = datetime.now() + timedelta(weeks=1)
+# Weekly Reset Timer (Set the initial reset time to be in UTC)
+reset_time = datetime.now(timezone.utc) + timedelta(weeks=1)
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -195,71 +207,109 @@ async def on_voice_state_update(member, before, after):
             start_time = voice_channel_start_times.pop(user_id)
             elapsed_minutes = (datetime.now() - start_time).total_seconds() // 60
             study_times[user_id] += int(elapsed_minutes)
-            await member.send(f"You've logged {int(elapsed_minutes)} minutes of study time!")
 
-@bot.tree.command(name='log_study', description='Manually log your study time')
-async def log_study_slash(interaction: discord.Interaction, minutes: int):
-    """Manually log study time in minutes."""
-    if minutes <= 0:
-        await interaction.response.send_message("Please enter a positive number of minutes.")
-        return
+@bot.tree.command(name='log_study', description='Check your total Pomodoro study time')
+async def log_study_slash(interaction: discord.Interaction):
+    """Check your total Pomodoro study time."""
     user_id = str(interaction.user.id)
-    study_times[user_id] += minutes
-    await interaction.response.send_message(f"{interaction.user.name}, you've manually logged {minutes} minutes of study time!")
+    total_pomodoro_time = pomodoro_times[user_id]
+    embed = discord.Embed(
+        title="Pomodoro Study Time",
+        description=f"{interaction.user.name}, you have studied for a total of {total_pomodoro_time} minutes using Pomodoro sessions!",
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name='show_leaderboard', description='Display the weekly study leaderboard')
 async def show_leaderboard_slash(interaction: discord.Interaction):
     """Generate and display the weekly study leaderboard"""
-    await interaction.response.defer() #Important to defer if it will take time
-    if not study_times:
-        await interaction.followup.send('No study times logged yet')
+    await interaction.response.defer()  # Important to defer if it will take time
+    if not study_times and not pomodoro_times:
+        await interaction.followup.send(embed=discord.Embed(
+            title="No Study Times Logged",
+            description="No study times logged yet",
+            color=discord.Color.blue()
+        ))
         return
-    # Sort users by study time
-    sorted_users = sorted(study_times.items(), key=lambda x: x[1], reverse=True)
-    
+
+    # Combine study times and Pomodoro times
+    combined_times = defaultdict(int, study_times)
+    for user_id, pomodoro_time in pomodoro_times.items():
+        combined_times[user_id] += pomodoro_time
+
+    # Sort users by combined study time
+    sorted_users = sorted(combined_times.items(), key=lambda x: x[1], reverse=True)
+
     # Create leaderboard image
-    image_width, image_height = 600, 400
-    background_color = (255, 255, 255) #white
-    text_color = (0, 0, 0) #black
+    image_width, image_height = 800, 600
+    background_color = (255, 255, 255)  # white
+    text_color = (0, 0, 0)  # black
+    highlight_color = (255, 223, 0)  # gold for top 3
 
     image = Image.new('RGB', (image_width, image_height), background_color)
     draw = ImageDraw.Draw(image)
-    font = ImageFont.truetype('arial.ttf', 20) #replace with another font if arial is unavailable
+    font_title = ImageFont.truetype('arial.ttf', 30)
+    font_text = ImageFont.truetype('arial.ttf', 20)
 
     # Title
     title = 'Weekly Study Leaderboard'
-    draw.text((image_width // 4, 10), title, fill=text_color, font=font)
+    draw.text((image_width // 4, 10), title, fill=text_color, font=font_title)
 
     # Add users to the leaderboard
-    y_offset = 50
+    y_offset = 70
     for i, (user_id, minutes) in enumerate(sorted_users[:10]):  # Top 10 users
         user = await bot.fetch_user(int(user_id))
+        
+        # Download user profile picture
+        avatar_url = user.display_avatar.url
+        avatar_data = await user.display_avatar.read()
+        avatar = Image.open(io.BytesIO(avatar_data))
+        avatar = avatar.resize((50, 50))  # Resize to fit on the leaderboard
+
+        # Highlight top 3 users
+        if i < 3:
+            draw.rectangle([10, y_offset, image_width - 10, y_offset + 60], fill=highlight_color)
+
+        # Paste the avatar on the leaderboard
+        image.paste(avatar, (10, y_offset))
+
+        # Draw the text next to the avatar
         draw.text(
-            (50, y_offset),
+            (70, y_offset + 15),
             f"{i + 1}. {user.name}: {minutes} minutes",
             fill=text_color,
-            font=font,
+            font=font_text,
         )
-        y_offset += 30
+        y_offset += 70  # Increase y_offset to accommodate avatars and spacing
 
-    # Save and send the image
-    image.save("leaderboard.png")
-    await interaction.followup.send(file=discord.File("leaderboard.png"))
+    # Save the image in memory
+    image_bytes = io.BytesIO()
+    image.save(image_bytes, format='PNG')
+    image_bytes.seek(0)
+
+    # Send the image without saving it locally
+    await interaction.followup.send(file=discord.File(fp=image_bytes, filename='leaderboard.png'))
 
 @tasks.loop(minutes=3)  # Check every 3 minutes
 async def reset_leaderboard():
     """Reset the leaderboard weekly."""
-    global reset_time, study_times
-    if datetime.now() >= reset_time:
+    global reset_time, study_times, pomodoro_times
+    now_utc = datetime.now(timezone.utc)
+    if now_utc >= reset_time:
         # Announce reset
         for guild in bot.guilds:  # Send to all servers the bot is in
             for channel in guild.text_channels:
                 if channel.permissions_for(guild.me).send_messages:
-                    await channel.send("Weekly leaderboard has been reset! Log your study times for the new week!")
+                    await channel.send(embed=discord.Embed(
+                        title="Weekly Leaderboard Reset",
+                        description="Weekly leaderboard has been reset! Log your study times for the new week!",
+                        color=discord.Color.blue()
+                    ))
                     break
         # Reset times and update the next reset time
         study_times.clear()
-        reset_time = datetime.now() + timedelta(weeks=1)
+        pomodoro_times.clear()
+        reset_time = now_utc + timedelta(weeks=1)
 
 # 4. Motivational Messages Command
 motivational_quotes = [
@@ -385,7 +435,7 @@ async def help_slash(interaction: discord.Interaction):
     /remove_task [task_number] - Remove a task from your to-do list by its number
     /motivate - Get a motivational message
     /health_reminder - Receive health reminders every 30 minutes (running in the background)
-    /log_study [minutes] - Log your study time in minutes
+    /log_study - Check your total Pomodoro study time
     /show_leaderboard - Display the weekly study leaderboard
     """
     await interaction.followup.send(help_message)
