@@ -1,5 +1,5 @@
 import discord
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from discord.ext import commands, tasks 
 from dotenv import load_dotenv
 import os
@@ -10,7 +10,6 @@ from collections import defaultdict
 from discord.ext import tasks
 import time
 import io
-from datetime import timezone
 
 # Load environment variables from .env file
 load_dotenv()
@@ -196,17 +195,22 @@ voice_channel_start_times = {}
 # Weekly Reset Timer (Set the initial reset time to be in UTC)
 reset_time = datetime.now(timezone.utc) + timedelta(weeks=1)
 
+# Configuration for tracked voice channels
+tracked_channels = set()  # Set of channel IDs that the bot will track
+
 @bot.event
 async def on_voice_state_update(member, before, after):
     user_id = str(member.id)
     
     if not before.channel and after.channel:  # User joins a voice channel
-        voice_channel_start_times[user_id] = datetime.now()
+        if after.channel.id in tracked_channels:
+            voice_channel_start_times[user_id] = datetime.now(timezone.utc)
     elif before.channel and not after.channel:  # User leaves a voice channel
-        if user_id in voice_channel_start_times:
-            start_time = voice_channel_start_times.pop(user_id)
-            elapsed_minutes = (datetime.now() - start_time).total_seconds() // 60
-            study_times[user_id] += int(elapsed_minutes)
+        if before.channel.id in tracked_channels:
+            if user_id in voice_channel_start_times:
+                start_time = voice_channel_start_times.pop(user_id)
+                elapsed_minutes = (datetime.now(timezone.utc) - start_time).total_seconds() // 60
+                study_times[user_id] += int(elapsed_minutes)
 
 @bot.tree.command(name='log_study', description='Check your total Pomodoro study time')
 async def log_study_slash(interaction: discord.Interaction):
@@ -222,94 +226,107 @@ async def log_study_slash(interaction: discord.Interaction):
 
 @bot.tree.command(name='show_leaderboard', description='Display the weekly study leaderboard')
 async def show_leaderboard_slash(interaction: discord.Interaction):
-    """Generate and display the weekly study leaderboard"""
-    await interaction.response.defer()  # Important to defer if it will take time
-    if not study_times and not pomodoro_times:
-        await interaction.followup.send(embed=discord.Embed(
-            title="No Study Times Logged",
-            description="No study times logged yet",
-            color=discord.Color.blue()
-        ))
-        return
+    await send_leaderboard(interaction.channel, interaction=interaction)
 
-    # Combine study times and Pomodoro times
+@bot.tree.command(name='add_study_room', description='Add a study room')
+@commands.has_permissions(administrator=True)
+async def add_study_room(interaction: discord.Interaction, room_id: str):
+    """Add a study room (admin command)."""
+    try:
+        room_id_int = int(room_id)  # Try converting to int for internal use
+        tracked_channels.add(room_id_int) # Add the integer to the set
+        await interaction.response.send_message(f"Study room with ID {room_id} added!")
+    except ValueError:
+        await interaction.response.send_message("Invalid room ID. Please provide a numeric ID.", ephemeral=True)
+
+@bot.tree.command(name='remove_study_room', description='Remove a study room')
+@commands.has_permissions(administrator=True)
+async def remove_study_room(interaction: discord.Interaction, room_id: str):
+    """Remove a study room (admin command)."""
+    try:
+        room_id_int = int(room_id) # Try converting to int for internal use
+        tracked_channels.discard(room_id_int)
+        await interaction.response.send_message(f"Study room with ID {room_id} removed!")
+    except ValueError:
+        await interaction.response.send_message("Invalid room ID. Please provide a numeric ID.", ephemeral=True)
+
+def format_time(minutes):
+    """Format time from minutes to hours and minutes."""
+    hours = minutes // 60
+    remaining_minutes = minutes % 60
+    if hours > 0:
+        return f"{hours} hours and {remaining_minutes} minutes"
+    else:
+        return f"{remaining_minutes} minutes"
+
+async def send_leaderboard(channel, interaction=None):
+    """Generate and send the leaderboard to a specified channel."""
     combined_times = defaultdict(int, study_times)
     for user_id, pomodoro_time in pomodoro_times.items():
         combined_times[user_id] += pomodoro_time
 
-    # Sort users by combined study time
     sorted_users = sorted(combined_times.items(), key=lambda x: x[1], reverse=True)
-
-    # Create leaderboard image
-    image_width, image_height = 800, 600
-    background_color = (255, 255, 255)  # white
-    text_color = (0, 0, 0)  # black
-    highlight_color = (255, 223, 0)  # gold for top 3
-
-    image = Image.new('RGB', (image_width, image_height), background_color)
-    draw = ImageDraw.Draw(image)
-    font_title = ImageFont.truetype('arial.ttf', 30)
-    font_text = ImageFont.truetype('arial.ttf', 20)
-
-    # Title
-    title = 'Weekly Study Leaderboard'
-    draw.text((image_width // 4, 10), title, fill=text_color, font=font_title)
-
-    # Add users to the leaderboard
-    y_offset = 70
-    for i, (user_id, minutes) in enumerate(sorted_users[:10]):  # Top 10 users
-        user = await bot.fetch_user(int(user_id))
-        
-        # Download user profile picture
-        avatar_url = user.display_avatar.url
-        avatar_data = await user.display_avatar.read()
-        avatar = Image.open(io.BytesIO(avatar_data))
-        avatar = avatar.resize((50, 50))  # Resize to fit on the leaderboard
-
-        # Highlight top 3 users
-        if i < 3:
-            draw.rectangle([10, y_offset, image_width - 10, y_offset + 60], fill=highlight_color)
-
-        # Paste the avatar on the leaderboard
-        image.paste(avatar, (10, y_offset))
-
-        # Draw the text next to the avatar
-        draw.text(
-            (70, y_offset + 15),
-            f"{i + 1}. {user.name}: {minutes} minutes",
-            fill=text_color,
-            font=font_text,
+    if not sorted_users:
+        embed = discord.Embed(
+            title="No Study Times Logged",
+            description="No study times logged yet.",
+            color=discord.Color.blue()
         )
-        y_offset += 70  # Increase y_offset to accommodate avatars and spacing
+        if interaction:
+            await interaction.response.send_message(embed=embed)
+        else:
+            await channel.send(embed=embed)
+        return
 
-    # Save the image in memory
-    image_bytes = io.BytesIO()
-    image.save(image_bytes, format='PNG')
-    image_bytes.seek(0)
+    leaderboard_text = "\n".join(
+        [f"{i + 1}. <@{user_id}>: {format_time(minutes)}" for i, (user_id, minutes) in enumerate(sorted_users[:10])]
+    )
+    embed = discord.Embed(
+        title="Weekly Study Leaderboard",
+        description=f"Top 10 of This Week! Congratulations keep up the good work :):\n{leaderboard_text}",
+        color=discord.Color.blue()
+    )
+    if interaction:
+        await interaction.response.send_message(embed=embed)
+    else:
+        await channel.send(embed=embed)
 
-    # Send the image without saving it locally
-    await interaction.followup.send(file=discord.File(fp=image_bytes, filename='leaderboard.png'))
-
-@tasks.loop(minutes=3)  # Check every 3 minutes
+@tasks.loop(hours=1)  # Check every hour
 async def reset_leaderboard():
     """Reset the leaderboard weekly."""
     global reset_time, study_times, pomodoro_times
     now_utc = datetime.now(timezone.utc)
     if now_utc >= reset_time:
-        # Announce reset
         for guild in bot.guilds:  # Send to all servers the bot is in
             for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
+                if channel.id == 1021442546083319822 and channel.permissions_for(guild.me).send_messages:
                     await channel.send(embed=discord.Embed(
                         title="Weekly Leaderboard Reset",
                         description="Weekly leaderboard has been reset! Log your study times for the new week!",
                         color=discord.Color.blue()
                     ))
                     break
-        # Reset times and update the next reset time
         study_times.clear()
         pomodoro_times.clear()
         reset_time = now_utc + timedelta(weeks=1)
+
+@tasks.loop(hours=1)  # Check every hour
+async def show_leaderboard_automatically():
+    """Display the weekly study leaderboard automatically every week at midnight UTC+0."""
+    global bot_start_time
+    if bot_start_time and datetime.now(timezone.utc) - bot_start_time < timedelta(hours=1):
+        # Skip the first run if the bot has just started
+        print("Skipping first run of show_leaderboard_automatically")
+        return
+    
+    now = datetime.now(timezone.utc)  # Ensure 'now' is defined here
+    if now.weekday() == 0 and now.hour == 0:  # At midnight on Monday UTC
+        print("It's Monday at midnight UTC, generating leaderboard...")  # Debug print
+        for guild in bot.guilds:
+            for channel in guild.text_channels:
+                if channel.id == 1021442546083319822 and channel.permissions_for(guild.me).send_messages:
+                    await send_leaderboard(channel)
+                    break
 
 # 4. Motivational Messages Command
 motivational_quotes = [
@@ -415,14 +432,6 @@ async def health_reminder():
     if channel:
         await channel.send(random.choice(reminders))
 
-@bot.event
-async def on_ready():
-    await bot.tree.sync()
-    print(f"Logged in as {bot.user} and slash commands are synced!")
-    health_reminder.start()  # Start the task when the bot is ready
-    reset_leaderboard.start()
-    print(f'We have logged in as {bot.user}')
-
 # 6. Help Commands
 @bot.tree.command(name='help', description='Shows available commands')
 async def help_slash(interaction: discord.Interaction):
@@ -439,6 +448,18 @@ async def help_slash(interaction: discord.Interaction):
     /show_leaderboard - Display the weekly study leaderboard
     """
     await interaction.followup.send(help_message)
+
+@bot.event
+async def on_ready():
+    global bot_start_time
+    bot_start_time = datetime.now(timezone.utc)
+
+    await bot.tree.sync()
+    print(f"Logged in as {bot.user} and slash commands are synced!")
+    health_reminder.start()  # Start the task when the bot is ready
+    reset_leaderboard.start()
+    show_leaderboard_automatically.start()
+    print(f'We have logged in as {bot.user}')
 
 # Run the bot
 bot.run(TOKEN)
