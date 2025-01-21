@@ -234,21 +234,57 @@ async def add_study_room(interaction: discord.Interaction, room_id: str):
     """Add a study room (admin command)."""
     try:
         room_id_int = int(room_id)  # Try converting to int for internal use
-        tracked_channels.add(room_id_int) # Add the integer to the set
-        await interaction.response.send_message(f"Study room with ID {room_id} added!")
+        if room_id_int in tracked_channels:
+            embed = discord.Embed(
+                title="Study Room Already Added",
+                description=f"Study room with ID {room_id_int} is already added.",
+                color=discord.Color.yellow()
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            tracked_channels.add(room_id_int)  # Add the integer to the set
+            embed = discord.Embed(
+                title="Study Room Added",
+                description=f"Study room with ID {room_id_int} added!",
+                color=discord.Color.blue()
+            )
+            await interaction.response.send_message(embed=embed)
     except ValueError:
-        await interaction.response.send_message("Invalid room ID. Please provide a numeric ID.", ephemeral=True)
+        embed = discord.Embed(
+            title="Invalid Room ID",
+            description="Invalid room ID. Please provide a numeric ID.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name='remove_study_room', description='Remove a study room')
 @commands.has_permissions(administrator=True)
 async def remove_study_room(interaction: discord.Interaction, room_id: str):
     """Remove a study room (admin command)."""
     try:
-        room_id_int = int(room_id) # Try converting to int for internal use
-        tracked_channels.discard(room_id_int)
-        await interaction.response.send_message(f"Study room with ID {room_id} removed!")
+        room_id_int = int(room_id)  # Try converting to int for internal use
+        if room_id_int not in tracked_channels:
+            embed = discord.Embed(
+                title="Study Room Not Found",
+                description=f"Study room with ID {room_id_int} is not in the list.",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed)
+        else:
+            tracked_channels.discard(room_id_int)
+            embed = discord.Embed(
+                title="Study Room Removed",
+                description=f"Study room with ID {room_id_int} removed!",
+                color=discord.Color.blue()
+            )
+            await interaction.response.send_message(embed=embed)
     except ValueError:
-        await interaction.response.send_message("Invalid room ID. Please provide a numeric ID.", ephemeral=True)
+        embed = discord.Embed(
+            title="Invalid Room ID",
+            description="Invalid room ID. Please provide a numeric ID.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 def format_time(minutes):
     """Format time from minutes to hours and minutes."""
@@ -261,9 +297,13 @@ def format_time(minutes):
 
 async def send_leaderboard(channel, interaction=None):
     """Generate and send the leaderboard to a specified channel."""
-    combined_times = defaultdict(int, study_times)
+    combined_times = defaultdict(int)
+    
+    # Combine Pomodoro times and voice channel study times
     for user_id, pomodoro_time in pomodoro_times.items():
         combined_times[user_id] += pomodoro_time
+    for user_id, study_time in study_times.items():
+        combined_times[user_id] += study_time
 
     sorted_users = sorted(combined_times.items(), key=lambda x: x[1], reverse=True)
     if not sorted_users:
