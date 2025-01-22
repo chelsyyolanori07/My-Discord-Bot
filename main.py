@@ -204,13 +204,16 @@ async def on_voice_state_update(member, before, after):
     
     if not before.channel and after.channel:  # User joins a voice channel
         if after.channel.id in tracked_channels:
+            print(f"{member.name} joined tracked channel {after.channel.id}")
             voice_channel_start_times[user_id] = datetime.now(timezone.utc)
     elif before.channel and not after.channel:  # User leaves a voice channel
         if before.channel.id in tracked_channels:
+            print(f"{member.name} left tracked channel {before.channel.id}")
             if user_id in voice_channel_start_times:
                 start_time = voice_channel_start_times.pop(user_id)
                 elapsed_minutes = (datetime.now(timezone.utc) - start_time).total_seconds() // 60
                 study_times[user_id] += int(elapsed_minutes)
+                print(f"Added {int(elapsed_minutes)} minutes to {member.name}'s study time")
 
 @bot.tree.command(name='log_study', description='Check your total Pomodoro study time')
 async def log_study_slash(interaction: discord.Interaction):
