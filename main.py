@@ -10,6 +10,7 @@ from collections import defaultdict
 from discord.ext import tasks
 import time
 import io
+import requests
 
 # Load environment variables from .env file
 load_dotenv()
@@ -202,18 +203,24 @@ tracked_channels = set()  # Set of channel IDs that the bot will track
 async def on_voice_state_update(member, before, after):
     user_id = str(member.id)
     
-    if not before.channel and after.channel:  # User joins a voice channel
-        if after.channel.id in tracked_channels:
-            print(f"{member.name} joined tracked channel {after.channel.id}")
-            voice_channel_start_times[user_id] = datetime.now(timezone.utc)
-    elif before.channel and not after.channel:  # User leaves a voice channel
-        if before.channel.id in tracked_channels:
+    if before.channel != after.channel:
+        # User leaves a tracked voice channel or moves to an untracked voice channel
+        if before.channel and before.channel.id in tracked_channels:
             print(f"{member.name} left tracked channel {before.channel.id}")
             if user_id in voice_channel_start_times:
                 start_time = voice_channel_start_times.pop(user_id)
                 elapsed_minutes = (datetime.now(timezone.utc) - start_time).total_seconds() // 60
                 study_times[user_id] += int(elapsed_minutes)
                 print(f"Added {int(elapsed_minutes)} minutes to {member.name}'s study time")
+            else:
+                print(f"{member.name} was not tracked in {before.channel.id}")
+
+        # User joins a tracked voice channel
+        if after.channel and after.channel.id in tracked_channels:
+            print(f"{member.name} joined tracked channel {after.channel.id}")
+            voice_channel_start_times[user_id] = datetime.now(timezone.utc)
+        else:
+            print(f"{member.name} joined an untracked or no channel")
 
 @bot.tree.command(name='log_study', description='Check your total Pomodoro study time')
 async def log_study_slash(interaction: discord.Interaction):
@@ -441,8 +448,25 @@ motivational_quotes = [
 
 @bot.tree.command(name='motivate', description='Get a motivational message')
 async def motivate_slash(interaction: discord.Interaction):
-    quote = random.choice(motivational_quotes)
-    await interaction.response.send_message(quote)
+    # Randomly choose to fetch from API or use static quotes
+    if random.choice([True, False]):
+        quote = random.choice(motivational_quotes)
+    else:
+        try:
+            response = requests.get("https://zenquotes.io/api/random")
+            data = response.json()
+            quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
+        except Exception as e:
+            quote = "You are amazing! Keep believing in yourself. 🌟" # Fallback quote
+            print(f"Error fetching quote: {e}")
+
+    embed = discord.Embed(
+        title="Motivational Quote",
+        description=quote,
+        color=discord.Color.blue()
+    )
+    
+    await interaction.response.send_message(embed=embed)
 
 # 5. Health Reminder (Background Task)
 @tasks.loop(minutes=5)  # Adjust interval as needed
@@ -498,7 +522,7 @@ async def on_ready():
     bot_start_time = datetime.now(timezone.utc)
 
     await bot.tree.sync()
-    print(f"Logged in as {bot.user} and slash commands are synced!")
+    print(f"Lfogged in as {bot.user} and slash commands are synced!")
     health_reminder.start()  # Start the task when the bot is ready
     reset_leaderboard.start()
     show_leaderboard_automatically.start()
