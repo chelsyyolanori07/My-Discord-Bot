@@ -468,53 +468,81 @@ async def motivate_slash(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
-# 5. Health Reminder (Background Task)
-@tasks.loop(minutes=5)  # Adjust interval as needed
+# List of channel IDs where reminders should be sent
+channel_ids = [1021442546083319822]  # Just add commas to add another channel
+
+reminders = [
+    "Time to drink some water! 💧",
+    "Take a deep breath and relax. 🌬️",
+    "Fix your posture! Sit up straight. 🪑",
+    "Stretch your arms and legs. 🧘‍♀️",
+    "Remember to blink and focus on your screen time. 👀",
+    "Stand up and walk around for a few minutes. 🚶‍♀️",
+    "Take a short break from your work. 🌻",
+    "Breathe in for 4 seconds, hold for 4 seconds, breathe out for 4 seconds. 🌬️",
+    "Check your eyes! Look away from the screen and focus on something far. 🧘‍♂️",
+    "Have a healthy snack! 🍎",
+    "Practice mindfulness for a few minutes. 🧘",
+    "Do some light stretching exercises. 🏃‍♀️",
+    "Give your eyes a break from screens. 🛑",
+    "Remember to drink herbal tea to relax. 🍵",
+    "Check your water intake for today. 💧",
+    "Do some light yoga poses. 🧘‍♀️",
+    "Try deep breathing exercises. 🌬️",
+    "Focus on your mental health today. 💆‍♀️",
+    "Take a short walk outside. 🌳",
+    "Adjust your screen brightness for better eye comfort. 📱",
+    "Stay hydrated throughout the day! 💧",
+    "Make time to meditate. 🧘‍♂️"
+]
+
+@tasks.loop(minutes=2)  # Adjust interval as needed
 async def health_reminder():
-    channel = bot.get_channel(1021442546083319822)  # Replace with the channel ID where reminders should be sent (Notes: How i make this diplay on multiple channel?)
-    reminders = [
-        "Time to drink some water! 💧",
-        "Take a deep breath and relax. 🌬️",
-        "Fix your posture! Sit up straight. 🪑"
-        "Stretch your arms and legs. 🧘‍♀️",
-        "Remember to blink and focus on your screen time. 👀",
-        "Stand up and walk around for a few minutes. 🚶‍♀️",
-        "Take a short break from your work. 🌻",
-        "Breathe in for 4 seconds, hold for 4 seconds, breathe out for 4 seconds. 🌬️",
-        "Check your eyes! Look away from the screen and focus on something far. 🧘‍♂️",
-        "Have a healthy snack! 🍎",
-        "Practice mindfulness for a few minutes. 🧘",
-        "Do some light stretching exercises. 🏃‍♀️",
-        "Give your eyes a break from screens. 🛑",
-        "Remember to drink herbal tea to relax. 🍵",
-        "Check your water intake for today. 💧",
-        "Do some light yoga poses. 🧘‍♀️",
-        "Try deep breathing exercises. 🌬️",
-        "Focus on your mental health today. 💆‍♀️",
-        "Take a short walk outside. 🌳",
-        "Adjust your screen brightness for better eye comfort. 📱",
-        "Stay hydrated throughout the day! 💧",
-        "Make time to meditate. 🧘‍♂️"
-    ]
-    if channel:
-        await channel.send(random.choice(reminders))
+    for channel_id in channel_ids:
+        channel = bot.get_channel(channel_id)
+        if channel:
+            embed = discord.Embed(
+                title="Health Reminder",
+                description=random.choice(reminders),
+                color=discord.Color.blue()
+            )
+            await channel.send(embed=embed)
+
+@bot.event
+async def on_ready():
+    health_reminder.start()
+    print(f'Logged in as {bot.user}!')
+
+# Adding a slash command for user-initiated reminders
+@bot.tree.command(name="health_reminder", description="Get a health reminder")
+async def health_reminder_command(interaction: discord.Interaction):
+    reminder = random.choice(reminders)
+    embed = discord.Embed(
+        title="Health Reminder",
+        description=reminder,
+        color=discord.Color.blue()
+    )
+    await interaction.response.send_message(embed=embed)
 
 # 6. Help Commands
 @bot.tree.command(name='help', description='Shows available commands')
 async def help_slash(interaction: discord.Interaction):
-    await interaction.response.defer()  # Important to defer before sending a message
-    help_message = """
-    **Here are the commands you can use:**
-    /pomodoro [work_minutes] [break_minutes] - Start a Pomodoro timer (default 25 work, 5 break)
-    /add_task [task] - Add a task to your to-do list
-    /show_tasks - Show your current to-do list
-    /remove_task [task_number] - Remove a task from your to-do list by its number
-    /motivate - Get a motivational message
-    /health_reminder - Receive health reminders every 30 minutes (running in the background)
-    /log_study - Check your total Pomodoro study time
-    /show_leaderboard - Display the weekly study leaderboard
-    """
-    await interaction.followup.send(help_message)
+    embed = discord.Embed(
+        title="Help Commands",
+        description="Here are the commands you can use:",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(name="/pomodoro [work_minutes] [break_minutes]", value="Start a Pomodoro timer (default 25 work, 5 break)", inline=False)
+    embed.add_field(name="/add_task [task]", value="Add a task to your to-do list", inline=False)
+    embed.add_field(name="/show_tasks", value="Show your current to-do list", inline=False)
+    embed.add_field(name="/remove_task [task_number]", value="Remove a task from your to-do list by its number", inline=False)
+    embed.add_field(name="/motivate", value="Get a motivational message", inline=False)
+    embed.add_field(name="/health_reminder", value="Receive health reminders every 30 minutes (running in the background)", inline=False)
+    embed.add_field(name="/log_study", value="Check your total Pomodoro study time", inline=False)
+    embed.add_field(name="/show_leaderboard", value="Display the weekly study leaderboard", inline=False)
+
+    await interaction.response.send_message(embed=embed)
 
 @bot.event
 async def on_ready():
@@ -522,7 +550,7 @@ async def on_ready():
     bot_start_time = datetime.now(timezone.utc)
 
     await bot.tree.sync()
-    print(f"Lfogged in as {bot.user} and slash commands are synced!")
+    print(f"Logged in as {bot.user} and slash commands are synced!")
     health_reminder.start()  # Start the task when the bot is ready
     reset_leaderboard.start()
     show_leaderboard_automatically.start()
