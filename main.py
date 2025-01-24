@@ -379,6 +379,11 @@ async def show_leaderboard_automatically():
                     break
 
 # 4. Motivational Messages Command
+
+# Initialize variables to keep track of the last shown messages
+last_motivational_quote = None
+last_health_reminder = None
+
 motivational_quotes = [
     "You can do it! 💪",
     "Believe in yourself! 🌟",
@@ -448,21 +453,38 @@ motivational_quotes = [
 
 @bot.tree.command(name='motivate', description='Get a motivational message')
 async def motivate_slash(interaction: discord.Interaction):
-    # Randomly choose to fetch from API or use static quotes
+    global last_motivational_quote
     if random.choice([True, False]):
-        quote = random.choice(motivational_quotes)
+        new_quote = random.choice(motivational_quotes)
     else:
         try:
             response = requests.get("https://zenquotes.io/api/random")
             data = response.json()
-            quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
+            new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
         except Exception as e:
-            quote = "You are amazing! Keep believing in yourself. 🌟" # Fallback quote
+            new_quote = "You are amazing! Keep believing in yourself. 🌟"  # Fallback quote
             print(f"Error fetching quote: {e}")
+
+    # Ensure the new quote is different from the last one
+    while new_quote == last_motivational_quote:
+        new_quote = random.choice(motivational_quotes)
+        
+        if random.choice([True, False]):
+            new_quote = random.choice(motivational_quotes)
+        else:
+            try:
+                response = requests.get("https://zenquotes.io/api/random")
+                data = response.json()
+                new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
+            except Exception as e:
+                new_quote = "You are amazing! Keep believing in yourself. 🌟"  # Fallback quote
+                print(f"Error fetching quote: {e}")
+
+    last_motivational_quote = new_quote
 
     embed = discord.Embed(
         title="Motivational Quote",
-        description=quote,
+        description=new_quote,
         color=discord.Color.blue()
     )
     
@@ -496,30 +518,42 @@ reminders = [
     "Make time to meditate. 🧘‍♂️"
 ]
 
-@tasks.loop(minutes=2)  # Adjust interval as needed
+@tasks.loop(minutes=5)  # Adjust interval as needed (before deploy change this into hours=1)
 async def health_reminder():
+    global last_health_reminder
     for channel_id in channel_ids:
         channel = bot.get_channel(channel_id)
         if channel:
+            new_reminder = random.choice(reminders)
+
+            # Ensure the new reminder is different from the last one
+            while new_reminder == last_health_reminder:
+                new_reminder = random.choice(reminders)
+
+            last_health_reminder = new_reminder
+
             embed = discord.Embed(
                 title="Health Reminder",
-                description=random.choice(reminders),
+                description=new_reminder,
                 color=discord.Color.blue()
             )
             await channel.send(embed=embed)
 
-@bot.event
-async def on_ready():
-    health_reminder.start()
-    print(f'Logged in as {bot.user}!')
-
 # Adding a slash command for user-initiated reminders
 @bot.tree.command(name="health_reminder", description="Get a health reminder")
 async def health_reminder_command(interaction: discord.Interaction):
-    reminder = random.choice(reminders)
+    global last_health_reminder
+    new_reminder = random.choice(reminders)
+
+    # Ensure the new reminder is different from the last one
+    while new_reminder == last_health_reminder:
+        new_reminder = random.choice(reminders)
+
+    last_health_reminder = new_reminder
+
     embed = discord.Embed(
         title="Health Reminder",
-        description=reminder,
+        description=new_reminder,
         color=discord.Color.blue()
     )
     await interaction.response.send_message(embed=embed)
