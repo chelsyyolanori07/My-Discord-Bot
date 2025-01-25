@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 import os
 import asyncio
 import random
-from PIL import Image, ImageDraw, ImageFont
 from collections import defaultdict
 from discord.ext import tasks
 import time
