@@ -11,6 +11,7 @@ import time
 import io
 import requests
 import re
+from keep_alive import keep_alive
 
 # Load environment variables from .env file
 load_dotenv()
@@ -637,6 +638,9 @@ async def on_ready():
     reset_leaderboard.start()
     show_leaderboard_automatically.start()
     print(f'We have logged in as {bot.user}')
+
+# Call keep_alive to start the server
+keep_alive()
 
 # Run the bot
 bot.run(TOKEN)
