@@ -13,33 +13,28 @@ import requests
 import re
 from keep_alive import keep_alive
 
-# Load environment variables from .env file
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-# Initialize the bot
 intents = discord.Intents.default()
-intents.message_content = True  # To access message content
-intents.voice_states = True #To track voice channel events
-intents.members = True #Required to fetch user information
+intents.message_content = True
+intents.voice_states = True
+intents.members = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
-# Dictionary to store user-specific timers
+# 1. Pomodoro Timer Commands
 user_timers = {}
-pomodoro_times = defaultdict(int)  # Track Pomodoro session times
+pomodoro_times = defaultdict(int) 
 
-# 1. Pomodoro Timer Command
 @bot.tree.command(name='pomodoro', description='Start a Pomodoro timer with custom durations.')
 async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 25, break_minutes: int = 5):
     """Start a Pomodoro timer with a visual progress bar inside an embed."""
-    user_id = str(interaction.user.id)  # Ensure user_id is a string
+    user_id = str(interaction.user.id)
 
-    # Validate user inputs
     if work_minutes <= 0 or break_minutes <= 0:
         await interaction.response.send_message("Please enter positive numbers for work and break minutes.")
         return
 
-    # Initial embed setup
     embed = discord.Embed(
         title="Pomodoro Timer",
         description=f"Work for {work_minutes} minutes. Progress updates will follow.",
@@ -73,34 +68,28 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
             await update_progress_embed(message, remaining_time, total_time, phase)
             await asyncio.sleep(0.5)
 
-        # Explicitly update the embed for 00:00
         await update_progress_embed(message, 0, total_time, phase)
 
         if phase == 'work':
-            # Work timer complete, send a new message for the break timer
             break_embed = discord.Embed(
                 title="Break Time!",
                 description=f"Get some rest for {break_minutes} minutes. A progress bar will track your break.",
                 color=discord.Color.green()
             )
             break_message = await interaction.followup.send(embed=break_embed)
-            await start_timer(break_message, break_time, 'break')  # Start the break timer
+            await start_timer(break_message, break_time, 'break')
         else:
-            # Break timer complete
             embed.title = "Pomodoro Session Complete!"
             embed.description = "You've completed a Pomodoro session! Great job buddy :)"
             embed.color = discord.Color.green()
             await message.edit(embed=embed)
 
-            # Remove the timer for the user
             if user_id in user_timers:
                 del user_timers[user_id]
 
-            # Log the completed study time
-            elapsed_minutes = work_minutes  # Only count the work time
+            elapsed_minutes = work_minutes
             pomodoro_times[user_id] += elapsed_minutes
 
-    # Cancel any existing timer for the user before starting a new one
     if user_id in user_timers and user_timers[user_id] is not None:
         user_timers[user_id].cancel()
 
@@ -109,7 +98,7 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
 # Stop Timer Command
 @bot.tree.command(name='stop_timer', description='Stop the Pomodoro timer if it is running.')
 async def stop_timer(interaction: discord.Interaction):
-    user_id = str(interaction.user.id)  # Ensure user_id is a string
+    user_id = str(interaction.user.id)
 
     if user_id in user_timers and user_timers[user_id] is not None:
         user_timers[user_id].cancel()
@@ -129,16 +118,15 @@ async def stop_timer(interaction: discord.Interaction):
         await interaction.response.send_message(embed=embed)
 
 # 2. To-Do List Commands
-# Dictionary to store tasks uniquely for each user
 to_do_list = defaultdict(list)
 
 @bot.tree.command(name='add_task', description='Add a task to your to-do list')
 async def add_task_slash(interaction: discord.Interaction, task: str):
     """Adds a task to the user's personal to-do list."""
-    user_id = str(interaction.user.id)  # Use the user's ID as a unique key
-    tasks = task.split(',')  # Split the input string into multiple tasks by commas
+    user_id = str(interaction.user.id)
+    tasks = task.split(',')
     for task in tasks:
-        to_do_list[user_id].append((task.strip(), False))  # Add each task to the user's list with a "done" status
+        to_do_list[user_id].append((task.strip(), False))
     embed = discord.Embed(title="To-Do List Update", description=f"Added tasks: {', '.join(task[0] for task in to_do_list[user_id])} to your to-do list!", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed)
 
@@ -149,12 +137,10 @@ async def show_tasks_slash(interaction: discord.Interaction):
     if user_id not in to_do_list or not to_do_list[user_id]:
         embed = discord.Embed(title="To-Do List", description="Your to-do list is empty!", color=discord.Color.blue())
     else:
-        # Calculate the percentage of completed tasks
         total_tasks = len(to_do_list[user_id])
         completed_tasks = sum(1 for task in to_do_list[user_id] if task[1])
         completion_percentage = (completed_tasks / total_tasks) * 100
 
-        # Format the task list for display
         tasks_list = "\n".join([f"{i + 1}. {task[0]} {'✅' if task[1] else ''}" for i, task in enumerate(to_do_list[user_id])])
         embed = discord.Embed(title="To-Do List", description=f"Your to-do list:\n{tasks_list}\n\n**Completion: {completion_percentage:.2f}%**", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed)
@@ -163,7 +149,6 @@ async def show_tasks_slash(interaction: discord.Interaction):
 async def remove_tasks_slash(interaction: discord.Interaction, indexes: str):
     user_id = str(interaction.user.id)
     try:
-        # Split input by commas or spaces, then filter out any empty strings
         index_list = sorted([int(i) for i in re.split('[, ]+', indexes) if i.strip()], reverse=True)
         if user_id not in to_do_list or any(not (1 <= i <= len(to_do_list[user_id])) for i in index_list):
             embed = discord.Embed(title="Error", description="Invalid task numbers! Make sure the numbers are within the range of your tasks.", color=discord.Color.red())
@@ -181,7 +166,6 @@ async def remove_tasks_slash(interaction: discord.Interaction, indexes: str):
 async def mark_tasks_done_slash(interaction: discord.Interaction, indexes: str):
     user_id = str(interaction.user.id)
     try:
-        # Split input by commas or spaces, then filter out any empty strings
         index_list = [int(i) for i in re.split('[, ]+', indexes) if i.strip()]
         if user_id not in to_do_list or any(not (1 <= i <= len(to_do_list[user_id])) for i in index_list):
             embed = discord.Embed(title="Error", description="Invalid task numbers! Make sure the numbers are within the range of your tasks.", color=discord.Color.red())
@@ -196,8 +180,8 @@ async def mark_tasks_done_slash(interaction: discord.Interaction, indexes: str):
         embed = discord.Embed(title="Error", description="Invalid task numbers! Please enter valid integers for the task indexes separated by spaces or commas.", color=discord.Color.red())
     await interaction.response.send_message(embed=embed)
 
-# 3. Study Tracker (Dictionary to store user study times)
-study_times = defaultdict(int)  # Format: {user_id: total_minutes}
+# 3. Study Tracker Commands
+study_times = defaultdict(int)
 voice_channel_start_times = {}
 
 # Weekly Reset Timer (Set the initial reset time to be in UTC)
@@ -388,9 +372,7 @@ async def show_leaderboard_automatically():
                     await send_leaderboard(channel)
                     break
 
-# 4. Motivational Messages Command
-
-# Initialize variables to keep track of the last shown messages
+# 4. Motivational Messages Commands
 last_motivational_quote = None
 last_health_reminder = None
 
@@ -472,10 +454,9 @@ async def motivate_slash(interaction: discord.Interaction):
             data = response.json()
             new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
         except Exception as e:
-            new_quote = "You are amazing! Keep believing in yourself. 🌟"  # Fallback quote
+            new_quote = "You are amazing! Keep believing in yourself. 🌟"
             print(f"Error fetching quote: {e}")
 
-    # Ensure the new quote is different from the last one
     while new_quote == last_motivational_quote:
         new_quote = random.choice(motivational_quotes)
         
@@ -487,7 +468,7 @@ async def motivate_slash(interaction: discord.Interaction):
                 data = response.json()
                 new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
             except Exception as e:
-                new_quote = "You are amazing! Keep believing in yourself. 🌟"  # Fallback quote
+                new_quote = "You are amazing! Keep believing in yourself. 🌟"
                 print(f"Error fetching quote: {e}")
 
     last_motivational_quote = new_quote
@@ -575,7 +556,6 @@ async def health_reminder():
         if channel:
             new_reminder = random.choice(reminders)
 
-            # Ensure the new reminder is different from the last one
             while new_reminder == last_health_reminder:
                 new_reminder = random.choice(reminders)
 
@@ -588,13 +568,11 @@ async def health_reminder():
             )
             await channel.send(embed=embed)
 
-# Adding a slash command for user-initiated reminders
 @bot.tree.command(name="health_reminder", description="Get a health reminder")
 async def health_reminder_command(interaction: discord.Interaction):
     global last_health_reminder
     new_reminder = random.choice(reminders)
 
-    # Ensure the new reminder is different from the last one
     while new_reminder == last_health_reminder:
         new_reminder = random.choice(reminders)
 
@@ -607,7 +585,7 @@ async def health_reminder_command(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-# 6. Help Commands
+# 6. Help Command
 @bot.tree.command(name='help', description='Shows available commands')
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(
