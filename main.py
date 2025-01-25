@@ -11,6 +11,7 @@ from discord.ext import tasks
 import time
 import io
 import requests
+import re
 
 # Load environment variables from .env file
 load_dotenv()
@@ -158,35 +159,41 @@ async def show_tasks_slash(interaction: discord.Interaction):
         embed = discord.Embed(title="To-Do List", description=f"Your to-do list:\n{tasks_list}\n\n**Completion: {completion_percentage:.2f}%**", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="remove_task", description="Remove a task by its number.")
-async def remove_task_slash(interaction: discord.Interaction, index: int):
+@bot.tree.command(name="remove_tasks", description="Remove multiple tasks by their numbers.")
+async def remove_tasks_slash(interaction: discord.Interaction, indexes: str):
     user_id = str(interaction.user.id)
     try:
-        if user_id not in to_do_list or not (1 <= index <= len(to_do_list[user_id])):
-            embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
+        # Split input by commas or spaces, then filter out any empty strings
+        index_list = sorted([int(i) for i in re.split('[, ]+', indexes) if i.strip()], reverse=True)
+        if user_id not in to_do_list or any(not (1 <= i <= len(to_do_list[user_id])) for i in index_list):
+            embed = discord.Embed(title="Error", description="Invalid task numbers! Make sure the numbers are within the range of your tasks.", color=discord.Color.red())
         else:
-            removed_task = to_do_list[user_id].pop(index - 1)
-            embed = discord.Embed(title="To-Do List Update", description=f"Removed task: '{removed_task[0]}' {'✅' if removed_task[1] else ''}", color=discord.Color.blue())
-    except IndexError:
-        embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
-    except ValueError:
-        embed = discord.Embed(title="Error", description="Please enter a valid integer for the task index.", color=discord.Color.red())
+            removed_tasks = []
+            for index in index_list:
+                removed_task = to_do_list[user_id].pop(index - 1)
+                removed_tasks.append(removed_task[0])
+            embed = discord.Embed(title="To-Do List Update", description=f"Removed tasks: {', '.join(removed_tasks)}", color=discord.Color.blue())
+    except (IndexError, ValueError):
+        embed = discord.Embed(title="Error", description="Invalid task numbers! Please enter valid integers for the task indexes separated by spaces or commas.", color=discord.Color.red())
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name='mark_task_done', description='Mark a task as done by its number.')
-async def mark_task_done_slash(interaction: discord.Interaction, index: int):
+@bot.tree.command(name='mark_tasks_done', description='Mark multiple tasks as done by their numbers.')
+async def mark_tasks_done_slash(interaction: discord.Interaction, indexes: str):
     user_id = str(interaction.user.id)
     try:
-        if user_id not in to_do_list or not (1 <= index <= len(to_do_list[user_id])):
-            embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
+        # Split input by commas or spaces, then filter out any empty strings
+        index_list = [int(i) for i in re.split('[, ]+', indexes) if i.strip()]
+        if user_id not in to_do_list or any(not (1 <= i <= len(to_do_list[user_id])) for i in index_list):
+            embed = discord.Embed(title="Error", description="Invalid task numbers! Make sure the numbers are within the range of your tasks.", color=discord.Color.red())
         else:
-            task, _ = to_do_list[user_id][index - 1]
-            to_do_list[user_id][index - 1] = (task, True)
-            embed = discord.Embed(title="To-Do List Update", description=f"Marked task '{task}' as done ✅. Look at you finishing that task, good luck with your other task :)", color=discord.Color.green())
-    except IndexError:
-        embed = discord.Embed(title="Error", description="Invalid task number! Make sure the number is within the range of your tasks.", color=discord.Color.red())
-    except ValueError:
-        embed = discord.Embed(title="Error", description="Please enter a valid integer for the task index.", color=discord.Color.red())
+            marked_tasks = []
+            for index in index_list:
+                task, _ = to_do_list[user_id][index - 1]
+                to_do_list[user_id][index - 1] = (task, True)
+                marked_tasks.append(task)
+            embed = discord.Embed(title="To-Do List Update", description=f"Marked tasks: {', '.join(marked_tasks)} as done ✅. Look at you finishing those tasks, good luck with your other tasks :)", color=discord.Color.green())
+    except (IndexError, ValueError):
+        embed = discord.Embed(title="Error", description="Invalid task numbers! Please enter valid integers for the task indexes separated by spaces or commas.", color=discord.Color.red())
     await interaction.response.send_message(embed=embed)
 
 # 3. Study Tracker (Dictionary to store user study times)
@@ -201,6 +208,9 @@ tracked_channels = set()  # Set of channel IDs that the bot will track
 
 @bot.event
 async def on_voice_state_update(member, before, after):
+    if member.bot:
+        return  # Ignore bot users
+
     user_id = str(member.id)
     
     if before.channel != after.channel:
@@ -516,6 +526,45 @@ reminders = [
     "Adjust your screen brightness for better eye comfort. 📱",
     "Stay hydrated throughout the day! 💧",
     "Make time to meditate. 🧘‍♂️"
+    "Stretch your neck gently side to side. 🧘",
+    "Relax your shoulders. Let go of any tension. 🫂",
+    "Take a moment to smile! 😊",
+    "Wash your hands if you haven’t in a while. 🧼",
+    "Stand up and do 10 squats! 🏋️",
+    "Take a deep breath and count to five. 🌬️",
+    "Do a quick wrist stretch to avoid strain. ✋",
+    "Close your eyes for 20 seconds to relax them. 😌",
+    "Check your surroundings for a moment of mindfulness. 🌱",
+    "Take a sip of your favorite tea or coffee. ☕",
+    "Write down something you're grateful for today. 📓",
+    "Let your eyes wander and notice something beautiful. 🌸",
+    "Open a window for some fresh air. 🌬️",
+    "Add some green plants to your workspace for a fresh vibe. 🌿",
+    "Do a quick shoulder roll exercise. 🔄",
+    "Keep a glass of water handy and sip frequently. 💧",
+    "Check your ergonomics: is your chair and desk setup comfortable? 🪑",
+    "Step outside for a breath of fresh air. 🌤️",
+    "Play your favorite calming music for 5 minutes. 🎶",
+    "Take a moment to appreciate yourself—you’re doing great! 🌟",
+    "Massage your temples or the back of your neck. 💆",
+    "Roll your ankles in small circles for better blood flow. 🔄",
+    "Take a 5-minute break to rest your mind. 🌻",
+    "Eat a piece of fruit for a healthy energy boost. 🍓",
+    "Organize your desk to create a more focused workspace. 📚",
+    "Drink a glass of water before you continue working. 💧",
+    "Take three slow, deep breaths to reset. 🌬️",
+    "Shake out your arms and legs to release tension. 🤲",
+    "Have a quick stretch or walk—it’s good for your back. 🚶",
+    "Take a quick mindfulness pause and notice 3 things around you. 🧘",
+    "Journal one positive thought or goal for the day. 📝",
+    "Do a quick hand massage to relax your fingers. 🤲",
+    "Look outside for a moment and connect with nature. 🌳",
+    "Lightly tap your shoulders and upper back for better circulation. 🖐️",
+    "Tidy up your immediate space—it helps your mental clarity. 🧹",
+    "Switch up your sitting position to avoid stiffness. 🪑",
+    "Give your wrists a gentle shake to release tension. ✋",
+    "Place your palms together and stretch your fingers outward. 🤝",
+    "Take a mindful sip of water and enjoy its refreshment. 💦"
 ]
 
 @tasks.loop(minutes=5)  # Adjust interval as needed (before deploy change this into hours=1)
