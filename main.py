@@ -547,7 +547,7 @@ reminders = [
     "Take a mindful sip of water and enjoy its refreshment. 💦"
 ]
 
-@tasks.loop(hours=1)  # Adjust interval as needed (before deploy change this into hours=1)
+@tasks.loop(hours=3)  # Adjust interval as needed
 async def health_reminder():
     global last_health_reminder
     for channel_id in channel_ids:
@@ -598,7 +598,7 @@ async def help_slash(interaction: discord.Interaction):
     embed.add_field(name="/show_tasks", value="Show your current to-do list", inline=False)
     embed.add_field(name="/remove_task [task_number]", value="Remove a task from your to-do list by its number (Use comma to delete multiple tasks)", inline=False)
     embed.add_field(name="/motivate", value="Get a motivational message", inline=False)
-    embed.add_field(name="/health_reminder", value="Receive health reminders every 30 minutes (running in the background)", inline=False)
+    embed.add_field(name="/health_reminder", value="Receive health reminders every 3 hours (running in the background)", inline=False)
     embed.add_field(name="/log_study", value="Check your total Pomodoro study time", inline=False)
     embed.add_field(name="/show_leaderboard", value="Display the weekly study leaderboard", inline=False)
     embed.add_field(name="/mark_tasks_done", value="Mark your tasks as finish (Use comma to mark multiple tasks)", inline=False)
