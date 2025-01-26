@@ -180,20 +180,21 @@ async def mark_tasks_done_slash(interaction: discord.Interaction, indexes: str):
         embed = discord.Embed(title="Error", description="Invalid task numbers! Please enter valid integers for the task indexes separated by spaces or commas.", color=discord.Color.red())
     await interaction.response.send_message(embed=embed)
 
-# 3. Study Tracker Commands
+# 3. Study Tracker (Dictionary to store user study times)
 study_times = defaultdict(int)
 voice_channel_start_times = {}
 
-# Weekly Reset Timer (Set the initial reset time to be in UTC)
-reset_time = datetime.now(timezone.utc) + timedelta(weeks=1)
+tracked_channels = set()
 
-# Configuration for tracked voice channels
-tracked_channels = set()  # Set of channel IDs that the bot will track
+# Weekly Reset Timer (Set the initial reset time to Monday 00:00 UTC)
+now = datetime.now(timezone.utc)
+next_monday = now + timedelta(days=(7 - now.weekday()) % 7)  # Find next Monday
+reset_time = datetime(next_monday.year, next_monday.month, next_monday.day, 0, 0, tzinfo=timezone.utc)
 
 @bot.event
 async def on_voice_state_update(member, before, after):
     if member.bot:
-        return  # Ignore bot users
+        return
 
     user_id = str(member.id)
     
@@ -237,7 +238,7 @@ async def show_leaderboard_slash(interaction: discord.Interaction):
 async def add_study_room(interaction: discord.Interaction, room_id: str):
     """Add a study room (admin command)."""
     try:
-        room_id_int = int(room_id)  # Try converting to int for internal use
+        room_id_int = int(room_id)
         if room_id_int in tracked_channels:
             embed = discord.Embed(
                 title="Study Room Already Added",
@@ -246,7 +247,7 @@ async def add_study_room(interaction: discord.Interaction, room_id: str):
             )
             await interaction.response.send_message(embed=embed)
         else:
-            tracked_channels.add(room_id_int)  # Add the integer to the set
+            tracked_channels.add(room_id_int)
             embed = discord.Embed(
                 title="Study Room Added",
                 description=f"Study room with ID {room_id_int} added!",
@@ -266,7 +267,7 @@ async def add_study_room(interaction: discord.Interaction, room_id: str):
 async def remove_study_room(interaction: discord.Interaction, room_id: str):
     """Remove a study room (admin command)."""
     try:
-        room_id_int = int(room_id)  # Try converting to int for internal use
+        room_id_int = int(room_id)
         if room_id_int not in tracked_channels:
             embed = discord.Embed(
                 title="Study Room Not Found",
@@ -335,15 +336,16 @@ async def send_leaderboard(channel, interaction=None):
     else:
         await channel.send(embed=embed)
 
-@tasks.loop(hours=1)  # Check every hour
+@tasks.loop(minutes=1)
 async def reset_leaderboard():
     """Reset the leaderboard weekly."""
     global reset_time, study_times, pomodoro_times
     now_utc = datetime.now(timezone.utc)
     if now_utc >= reset_time:
-        for guild in bot.guilds:  # Send to all servers the bot is in
+        for guild in bot.guilds:
             for channel in guild.text_channels:
-                if channel.id == 1021442546083319822 and channel.permissions_for(guild.me).send_messages:
+                if channel.permissions_for(guild.me).send_messages:
+                    await send_leaderboard(channel)
                     await channel.send(embed=discord.Embed(
                         title="Weekly Leaderboard Reset",
                         description="Weekly leaderboard has been reset! Log your study times for the new week!",
@@ -352,23 +354,23 @@ async def reset_leaderboard():
                     break
         study_times.clear()
         pomodoro_times.clear()
-        reset_time = now_utc + timedelta(weeks=1)
+        reset_time = now_utc + timedelta(weeks=1)  # Reset every week at Monday 00:00 UTC
 
-@tasks.loop(hours=1)  # Check every hour
+@tasks.loop(minutes=1)
 async def show_leaderboard_automatically():
-    """Display the weekly study leaderboard automatically every week at midnight UTC+0."""
+    """Display the weekly study leaderboard automatically every week at midnight UTC."""
     global bot_start_time
-    if bot_start_time and datetime.now(timezone.utc) - bot_start_time < timedelta(hours=1):
+    if bot_start_time and datetime.now(timezone.utc) - bot_start_time < timedelta(minutes=1):
         # Skip the first run if the bot has just started
         print("Skipping first run of show_leaderboard_automatically")
         return
     
-    now = datetime.now(timezone.utc)  # Ensure 'now' is defined here
+    now = datetime.now(timezone.utc)
     if now.weekday() == 0 and now.hour == 0:  # At midnight on Monday UTC
-        print("It's Monday at midnight UTC, generating leaderboard...")  # Debug print
+        print("It's Monday at midnight UTC, generating leaderboard...")
         for guild in bot.guilds:
             for channel in guild.text_channels:
-                if channel.id == 1021442546083319822 and channel.permissions_for(guild.me).send_messages:
+                if channel.permissions_for(guild.me).send_messages:
                     await send_leaderboard(channel)
                     break
 
@@ -548,7 +550,7 @@ reminders = [
     "Take a mindful sip of water and enjoy its refreshment. 💦"
 ]
 
-@tasks.loop(minutes=5)  # Adjust interval as needed (before deploy change this into hours=1)
+@tasks.loop(hours=1)  # Adjust interval as needed (before deploy change this into hours=1)
 async def health_reminder():
     global last_health_reminder
     for channel_id in channel_ids:
@@ -612,7 +614,7 @@ async def on_ready():
 
     await bot.tree.sync()
     print(f"Logged in as {bot.user} and slash commands are synced!")
-    health_reminder.start()  # Start the task when the bot is ready
+    health_reminder.start()
     reset_leaderboard.start()
     show_leaderboard_automatically.start()
     print(f'We have logged in as {bot.user}')
