@@ -186,9 +186,11 @@ voice_channel_start_times = {}
 
 tracked_channels = set()
 
+announcement_channel_id = 1066986579119321088 # Replace with your specific channel ID
+
 # Weekly Reset Timer (Set the initial reset time to Monday 00:00 UTC)
 now = datetime.now(timezone.utc)
-next_monday = now + timedelta(days=(7 - now.weekday()) % 7)  # Find next Monday
+next_monday = now + timedelta(days=(7 - now.weekday()) % 7)
 reset_time = datetime(next_monday.year, next_monday.month, next_monday.day, 0, 0, tzinfo=timezone.utc)
 
 @bot.event
@@ -210,7 +212,6 @@ async def on_voice_state_update(member, before, after):
             else:
                 print(f"{member.name} was not tracked in {before.channel.id}")
 
-        # User joins a tracked voice channel
         if after.channel and after.channel.id in tracked_channels:
             print(f"{member.name} joined tracked channel {after.channel.id}")
             voice_channel_start_times[user_id] = datetime.now(timezone.utc)
@@ -224,7 +225,7 @@ async def log_study_slash(interaction: discord.Interaction):
     total_pomodoro_time = pomodoro_times[user_id]
     embed = discord.Embed(
         title="Pomodoro Study Time",
-        description=f"{interaction.user.name}, you have studied for a total of {total_pomodoro_time} minutes using Pomodoro sessions!",
+        description=f"{interaction.user.name}, you have studied for a total of {total_pomodoro_time} minutes using Pomodoro sessions :)",
         color=discord.Color.blue()
     )
     await interaction.response.send_message(embed=embed)
@@ -328,7 +329,7 @@ async def send_leaderboard(channel, interaction=None):
     )
     embed = discord.Embed(
         title="Weekly Study Leaderboard",
-        description=f"Top 10 of This Week! Congratulations keep up the good work :):\n{leaderboard_text}",
+        description=f"Top 10 of This Week! Congratulations guys keep up the good work :) :\n{leaderboard_text}",
         color=discord.Color.blue()
     )
     if interaction:
@@ -338,41 +339,37 @@ async def send_leaderboard(channel, interaction=None):
 
 @tasks.loop(minutes=1)
 async def reset_leaderboard():
-    """Reset the leaderboard weekly."""
+    """Reset the leaderboard every week at Monday 00:00 UTC."""
     global reset_time, study_times, pomodoro_times
     now_utc = datetime.now(timezone.utc)
     if now_utc >= reset_time:
-        for guild in bot.guilds:
-            for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
-                    await send_leaderboard(channel)
-                    await channel.send(embed=discord.Embed(
-                        title="Weekly Leaderboard Reset",
-                        description="Weekly leaderboard has been reset! Log your study times for the new week!",
-                        color=discord.Color.blue()
-                    ))
-                    break
-        study_times.clear()
-        pomodoro_times.clear()
-        reset_time = now_utc + timedelta(weeks=1)  # Reset every week at Monday 00:00 UTC
+        print(f"Resetting leaderboard at {now_utc}")
+        channel = bot.get_channel(announcement_channel_id)
+        if channel and channel.permissions_for(channel.guild.me).send_messages:
+            await send_leaderboard(channel)
+            await channel.send(embed=discord.Embed(
+                title="Weekly Leaderboard Reset",
+                description="Weekly leaderboard has been reset! Log your study times for the new week!",
+                color=discord.Color.blue()
+            ))
+            study_times.clear()
+            pomodoro_times.clear()
+        reset_time = now_utc + timedelta(weeks=1)
 
 @tasks.loop(minutes=1)
 async def show_leaderboard_automatically():
-    """Display the weekly study leaderboard automatically every week at midnight UTC."""
+    """Display the weekly study leaderboard automatically every week at Monday 00:00 UTC."""
     global bot_start_time
     if bot_start_time and datetime.now(timezone.utc) - bot_start_time < timedelta(minutes=1):
-        # Skip the first run if the bot has just started
         print("Skipping first run of show_leaderboard_automatically")
         return
     
     now = datetime.now(timezone.utc)
-    if now.weekday() == 0 and now.hour == 0:  # At midnight on Monday UTC
-        print("It's Monday at midnight UTC, generating leaderboard...")
-        for guild in bot.guilds:
-            for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).send_messages:
-                    await send_leaderboard(channel)
-                    break
+    if now.weekday() == 0 and now.hour == 0:
+        print(f"Generating leaderboard at {now}")
+        channel = bot.get_channel(announcement_channel_id)
+        if channel and channel.permissions_for(channel.guild.me).send_messages:
+            await send_leaderboard(channel)
 
 # 4. Motivational Messages Commands
 last_motivational_quote = None
@@ -484,7 +481,7 @@ async def motivate_slash(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # List of channel IDs where reminders should be sent
-channel_ids = [1021442546083319822]  # Just add commas to add another channel
+channel_ids = [1066983707094810694, 1324671835803095093, 1324672121372413962, 1324672253019029564, 1182250157492944898]  # Just add commas to add another channel
 
 reminders = [
     "Time to drink some water! 💧",
@@ -597,13 +594,14 @@ async def help_slash(interaction: discord.Interaction):
     )
 
     embed.add_field(name="/pomodoro [work_minutes] [break_minutes]", value="Start a Pomodoro timer (default 25 work, 5 break)", inline=False)
-    embed.add_field(name="/add_task [task]", value="Add a task to your to-do list", inline=False)
+    embed.add_field(name="/add_task [task]", value="Add a task to your to-do list (Use comma to add more than one tasks)", inline=False)
     embed.add_field(name="/show_tasks", value="Show your current to-do list", inline=False)
-    embed.add_field(name="/remove_task [task_number]", value="Remove a task from your to-do list by its number", inline=False)
+    embed.add_field(name="/remove_task [task_number]", value="Remove a task from your to-do list by its number (Use comma to delete multiple tasks)", inline=False)
     embed.add_field(name="/motivate", value="Get a motivational message", inline=False)
     embed.add_field(name="/health_reminder", value="Receive health reminders every 30 minutes (running in the background)", inline=False)
     embed.add_field(name="/log_study", value="Check your total Pomodoro study time", inline=False)
     embed.add_field(name="/show_leaderboard", value="Display the weekly study leaderboard", inline=False)
+    embed.add_field(name="/mark_tasks_done", value="Mark your tasks as finish (Use comma to mark multiple tasks)", inline=False)
 
     await interaction.response.send_message(embed=embed)
 
