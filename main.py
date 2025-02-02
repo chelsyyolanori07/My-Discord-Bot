@@ -806,5 +806,8 @@ async def on_ready():
     show_leaderboard_automatically.start()
     print(f'We have logged in as {bot.user}')
 
+# Call keep_alive to start the server
+keep_alive()
+
 # Run the bot
 bot.run(TOKEN)
