@@ -1,111 +1,173 @@
+import asyncio
 import discord
 from datetime import datetime, timedelta, timezone
-from discord.ext import commands, tasks 
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 import os
-import asyncio
 import random
 from collections import defaultdict
-from discord.ext import tasks
 import time
 import io
+from io import BytesIO
 import requests
 import re
+import aiohttp
 from keep_alive import keep_alive
 
+# Load environment variables from .env file
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
+# Initialize the bot
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 intents.members = True
 bot = commands.Bot(command_prefix='/', intents=intents)
 
-# 1. Pomodoro Timer Commands
+# 1. Pomodoro Feature
 user_timers = {}
-pomodoro_times = defaultdict(int) 
+work_times = defaultdict(int)
 
 @bot.tree.command(name='pomodoro', description='Start a Pomodoro timer with custom durations.')
 async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 25, break_minutes: int = 5):
-    """Start a Pomodoro timer with a visual progress bar inside an embed."""
+    """Start a Pomodoro timer with custom durations and updates every second."""
     user_id = str(interaction.user.id)
 
-    if work_minutes <= 0 or break_minutes <= 0:
-        await interaction.response.send_message("Please enter positive numbers for work and break minutes.")
+    if work_minutes <= 0:
+        embed = discord.Embed(
+            title="Invalid Input",
+            description="Please enter a positive number for work minutes.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
         return
 
-    embed = discord.Embed(
-        title="Pomodoro Timer",
-        description=f"Work for {work_minutes} minutes. Progress updates will follow.",
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text="Pomodoro Timer in progress")
-    await interaction.response.defer()
-    work_message = await interaction.followup.send(embed=embed, wait=True)
+    if break_minutes <= 0:
+        break_minutes = 5  # Default break time
 
+    max_chunk = 14 * 60
     work_time = work_minutes * 60
     break_time = break_minutes * 60
     bar_length = 20
 
-    async def update_progress_embed(message, remaining_time, total_time, phase):
-        minutes, seconds = divmod(remaining_time, 60)
-        elapsed_time = total_time - remaining_time
-        progress = elapsed_time / total_time
-        filled_length = int(bar_length * progress)
-        bar = "█" * filled_length + "–" * (bar_length - filled_length)
-        if phase == 'work':
-            embed.description = f"Work Timer: [{bar}] {minutes:02d}:{seconds:02d}\nWork for {work_minutes} minutes."
-        else:
-            embed.description = f"Break Timer: [{bar}] {minutes:02d}:{seconds:02d}\nTake a break for {break_minutes} minutes."
-        await message.edit(embed=embed)
+    # Initial Work Timer Embed
+    embed = discord.Embed(
+        title="Pomodoro Timer",
+        description=f"Work for {work_minutes} minutes. Timer updates every second.",
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="Pomodoro Timer in progress")
 
-    async def start_timer(message, total_time, phase):
-        start_time = time.monotonic()
-        end_time = start_time + total_time
+    await interaction.response.defer()
+    message = await interaction.followup.send(embed=embed, wait=True)
 
-        while (remaining_time := int(end_time - time.monotonic())) > 0:
-            await update_progress_embed(message, remaining_time, total_time, phase)
-            await asyncio.sleep(0.5)
+    async def update_timer_embed(message, remaining_time, total_time, phase):
+        """Update the embed progress bar dynamically."""
+        try:
+            minutes, seconds = divmod(remaining_time, 60)
+            elapsed_time = total_time - remaining_time
+            progress = elapsed_time / total_time
+            filled_length = int(bar_length * progress)
+            bar = "█" * filled_length + "–" * (bar_length - filled_length)
 
-        await update_progress_embed(message, 0, total_time, phase)
+            embed = message.embeds[0]
+            if phase == "Work":
+                embed.description = f"Work Timer: [{bar}] {minutes:02d}:{seconds:02d}\nWork for {work_minutes} minutes."
+            else:
+                embed.description = f"Break Timer: [{bar}] {minutes:02d}:{seconds:02d}\nTake a break for {break_minutes} minutes."
 
-        if phase == 'work':
-            break_embed = discord.Embed(
-                title="Break Time!",
-                description=f"Get some rest for {break_minutes} minutes. A progress bar will track your break.",
-                color=discord.Color.green()
-            )
-            break_message = await interaction.followup.send(embed=break_embed)
-            await start_timer(break_message, break_time, 'break')
-        else:
-            embed.title = "Pomodoro Session Complete!"
-            embed.description = "You've completed a Pomodoro session! Great job buddy :)"
-            embed.color = discord.Color.green()
             await message.edit(embed=embed)
+            return message
+        except discord.NotFound:
+            print("Error: Message not found. It may have been deleted.")
+        except discord.Forbidden:
+            print("Error: Bot lacks permission to edit messages.")
+        except discord.HTTPException as e:
+            print(f"Error updating embed: {e}")
+        return message
 
-            if user_id in user_timers:
-                del user_timers[user_id]
+    async def start_timer(interaction, message, total_time, phase, user_id):
+        """Run the Pomodoro timer in 14-minute chunks while updating the embed dynamically."""
+        remaining_time = total_time
+        start_time = int(time.time())
+        thread = None
 
-            elapsed_minutes = work_minutes
-            pomodoro_times[user_id] += elapsed_minutes
+        user_timers[user_id] = asyncio.current_task()
+        user_timers[user_id].start_time = start_time
 
-    if user_id in user_timers and user_timers[user_id] is not None:
-        user_timers[user_id].cancel()
+        while remaining_time > 0:
+            chunk_time = min(remaining_time, max_chunk)
+            for _ in range(chunk_time):
+                if remaining_time <= 0 or user_timers.get(user_id) is None:
+                    return
+                message = await update_timer_embed(message, remaining_time, total_time, phase)
+                await asyncio.sleep(0.5)
+                remaining_time -= 1
 
-    user_timers[user_id] = asyncio.create_task(start_timer(work_message, work_time, 'work'))
+            if remaining_time > 0:
+                new_embed = discord.Embed(
+                    title=f"{phase} Timer Continues...",
+                    description="Timer is still running...",
+                    color=discord.Color.blue() if phase == "Work" else discord.Color.green()
+                )
+                new_embed.set_footer(text="Pomodoro Timer in progress")
+                message = await message.channel.send(embed=new_embed)
+                thread = await interaction.channel.create_thread(
+                    name=f"{interaction.user.display_name}'s {phase} Timer Thread", message=message
+                )
+                message = await thread.send(embed=new_embed)
 
-# Stop Timer Command
-@bot.tree.command(name='stop_timer', description='Stop the Pomodoro timer if it is running.')
-async def stop_timer(interaction: discord.Interaction):
-    user_id = str(interaction.user.id)
+        end_time = int(time.time())
+        elapsed_work_time = total_time
+        if phase == "Work":
+            work_times[user_id] += elapsed_work_time
 
+        return message, thread
+
+    # Stop previous timer if running
     if user_id in user_timers and user_timers[user_id] is not None:
         user_timers[user_id].cancel()
         user_timers[user_id] = None
+
+    message, thread = await start_timer(interaction, message, work_time, "Work", user_id)
+
+    embed = discord.Embed(
+        title="Work Session Complete",
+        description=f"**Work session complete! You worked for {work_minutes} minutes. It's time for a break.. Don't forget to breathe :)** 🎉",
+        color=discord.Color.green()
+    )
+    await thread.send(embed=embed)
+
+    break_embed = discord.Embed(
+        title="Break Timer",
+        description=f"Take a break for {break_minutes} minutes. Timer updates every second.",
+        color=discord.Color.blue()
+    )
+    break_embed.set_footer(text="Break Timer in progress")
+    break_message = await thread.send(embed=break_embed)
+    message, _ = await start_timer(interaction, break_message, break_time, "Break", user_id)
+
+    embed = discord.Embed(
+        title="Break Over",
+        description="**You've completed a Pomodoro session! Great job buddy :)** ✅",
+        color=discord.Color.green()
+    )
+    await thread.send(embed=embed)
+
+@bot.tree.command(name='stop_timer', description='Stop the Pomodoro timer if it is running.')
+async def stop_timer(interaction: discord.Interaction):
+    """Stop the Pomodoro timer if running."""
+    user_id = str(interaction.user.id)
+    if user_id in user_timers and user_timers[user_id] is not None:
+        user_timers[user_id].cancel()
+        elapsed_work_time = int(time.time()) - user_timers[user_id].start_time
+        work_times[user_id] += elapsed_work_time
+        user_timers[user_id] = None
+
         embed = discord.Embed(
             title="Pomodoro Timer Stopped",
-            description="The timer has been stopped successfully.",
+            description=f"The timer has been stopped successfully. You worked for {elapsed_work_time // 60} minutes.",
             color=discord.Color.blue()
         )
         await interaction.response.send_message(embed=embed)
@@ -117,7 +179,7 @@ async def stop_timer(interaction: discord.Interaction):
         )
         await interaction.response.send_message(embed=embed)
 
-# 2. To-Do List Commands
+# 2. To-Do List Feature
 to_do_list = defaultdict(list)
 
 @bot.tree.command(name='add_task', description='Add a task to your to-do list')
@@ -126,8 +188,10 @@ async def add_task_slash(interaction: discord.Interaction, task: str):
     user_id = str(interaction.user.id)
     tasks = task.split(',')
     for task in tasks:
-        to_do_list[user_id].append((task.strip(), False))
-    embed = discord.Embed(title="To-Do List Update", description=f"Added tasks: {', '.join(task[0] for task in to_do_list[user_id])} to your to-do list!", color=discord.Color.blue())
+        to_do_list[user_id].append((task.strip(), False))  # Add tasks as "not done"
+    
+    tasks_display = "\n".join([f"{i + 1}. {t[0]} {'✅' if t[1] else ''}" for i, t in enumerate(to_do_list[user_id])])
+    embed = discord.Embed(title="To-Do List Update", description=f"Added tasks:\n{tasks_display}", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name='show_tasks', description='Show all tasks in your to-do list')
@@ -142,7 +206,11 @@ async def show_tasks_slash(interaction: discord.Interaction):
         completion_percentage = (completed_tasks / total_tasks) * 100
 
         tasks_list = "\n".join([f"{i + 1}. {task[0]} {'✅' if task[1] else ''}" for i, task in enumerate(to_do_list[user_id])])
-        embed = discord.Embed(title="To-Do List", description=f"Your to-do list:\n{tasks_list}\n\n**Completion: {completion_percentage:.2f}%**", color=discord.Color.blue())
+        embed = discord.Embed(
+            title="To-Do List",
+            description=f"Your to-do list:\n{tasks_list}\n\n**Completion: {completion_percentage:.2f}%**",
+            color=discord.Color.blue()
+        )
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="remove_tasks", description="Remove multiple tasks by their numbers.")
@@ -166,7 +234,7 @@ async def remove_tasks_slash(interaction: discord.Interaction, indexes: str):
 async def mark_tasks_done_slash(interaction: discord.Interaction, indexes: str):
     user_id = str(interaction.user.id)
     try:
-        index_list = [int(i) for i in re.split('[, ]+', indexes) if i.strip()]
+        index_list = sorted([int(i) for i in re.split('[, ]+', indexes) if i.strip()], reverse=True)
         if user_id not in to_do_list or any(not (1 <= i <= len(to_do_list[user_id])) for i in index_list):
             embed = discord.Embed(title="Error", description="Invalid task numbers! Make sure the numbers are within the range of your tasks.", color=discord.Color.red())
         else:
@@ -175,18 +243,39 @@ async def mark_tasks_done_slash(interaction: discord.Interaction, indexes: str):
                 task, _ = to_do_list[user_id][index - 1]
                 to_do_list[user_id][index - 1] = (task, True)
                 marked_tasks.append(task)
-            embed = discord.Embed(title="To-Do List Update", description=f"Marked tasks: {', '.join(marked_tasks)} as done ✅. Look at you finishing those tasks, good luck with your other tasks :)", color=discord.Color.green())
+
+            # Check if all tasks are completed
+            if all(task[1] for task in to_do_list[user_id]):
+                completed_tasks = "\n".join([f"{i + 1}. {task[0]} {'✅'}" for i, task in enumerate(to_do_list[user_id])])
+                embed = discord.Embed(
+                    title="To-Do List Completed",
+                    description=f"Congratulations! All tasks have been completed:\n{completed_tasks}\n\nYour to-do list has been cleared. Feel free to add new tasks!",
+                    color=discord.Color.green()
+                )
+                to_do_list[user_id].clear()
+            else:
+                embed = discord.Embed(
+                    title="To-Do List Update",
+                    description=f"Marked tasks: {', '.join(marked_tasks)} as done ✅. Look at you finishing those tasks, good luck with your other tasks :)",
+                    color=discord.Color.green()
+                )
     except (IndexError, ValueError):
-        embed = discord.Embed(title="Error", description="Invalid task numbers! Please enter valid integers for the task indexes separated by spaces or commas.", color=discord.Color.red())
+        embed = discord.Embed(
+            title="Error",
+            description="Invalid task numbers! Please enter valid integers for the task indexes separated by spaces or commas.",
+            color=discord.Color.red()
+        )
     await interaction.response.send_message(embed=embed)
 
-# 3. Study Tracker (Dictionary to store user study times)
+# 3. Study Tracker Feature
 study_times = defaultdict(int)
 voice_channel_start_times = {}
 
-tracked_channels = set()
+# Configuration for tracked voice channels
+tracked_channels = set()  # Set of channel IDs that the bot will track
 
-announcement_channel_id = 1066986579119321088 # Replace with your specific channel ID
+# Specify the channel ID for automatic announcements and resets
+announcement_channel_id = 10  # Replace with your specific channel ID
 
 # Weekly Reset Timer (Set the initial reset time to Monday 00:00 UTC)
 now = datetime.now(timezone.utc)
@@ -212,6 +301,7 @@ async def on_voice_state_update(member, before, after):
             else:
                 print(f"{member.name} was not tracked in {before.channel.id}")
 
+        # User joins a tracked voice channel
         if after.channel and after.channel.id in tracked_channels:
             print(f"{member.name} joined tracked channel {after.channel.id}")
             voice_channel_start_times[user_id] = datetime.now(timezone.utc)
@@ -222,10 +312,11 @@ async def on_voice_state_update(member, before, after):
 async def log_study_slash(interaction: discord.Interaction):
     """Check your total Pomodoro study time."""
     user_id = str(interaction.user.id)
-    total_pomodoro_time = pomodoro_times[user_id]
+    total_pomodoro_time = work_times[user_id] // 60
+
     embed = discord.Embed(
         title="Pomodoro Study Time",
-        description=f"{interaction.user.name}, you have studied for a total of {total_pomodoro_time} minutes using Pomodoro sessions :)",
+        description=f"{interaction.user.name}, you have studied for a total of {total_pomodoro_time} minutes using Pomodoro sessions!",
         color=discord.Color.blue()
     )
     await interaction.response.send_message(embed=embed)
@@ -248,7 +339,7 @@ async def add_study_room(interaction: discord.Interaction, room_id: str):
             )
             await interaction.response.send_message(embed=embed)
         else:
-            tracked_channels.add(room_id_int)
+            tracked_channels.add(room_id_int)  # Add the integer to the set
             embed = discord.Embed(
                 title="Study Room Added",
                 description=f"Study room with ID {room_id_int} added!",
@@ -305,9 +396,8 @@ async def send_leaderboard(channel, interaction=None):
     """Generate and send the leaderboard to a specified channel."""
     combined_times = defaultdict(int)
     
-    # Combine Pomodoro times and voice channel study times
-    for user_id, pomodoro_time in pomodoro_times.items():
-        combined_times[user_id] += pomodoro_time
+    for user_id, work_time in work_times.items():
+        combined_times[user_id] += work_time // 60
     for user_id, study_time in study_times.items():
         combined_times[user_id] += study_time
 
@@ -329,7 +419,7 @@ async def send_leaderboard(channel, interaction=None):
     )
     embed = discord.Embed(
         title="Weekly Study Leaderboard",
-        description=f"Top 10 of This Week! Congratulations guys keep up the good work :) :\n{leaderboard_text}",
+        description=f"Top 10 of This Week! Congratulations keep up the good work :):\n{leaderboard_text}",
         color=discord.Color.blue()
     )
     if interaction:
@@ -340,7 +430,7 @@ async def send_leaderboard(channel, interaction=None):
 @tasks.loop(minutes=1)
 async def reset_leaderboard():
     """Reset the leaderboard every week at Monday 00:00 UTC."""
-    global reset_time, study_times, pomodoro_times
+    global reset_time, study_times, work_times
     now_utc = datetime.now(timezone.utc)
     if now_utc >= reset_time:
         print(f"Resetting leaderboard at {now_utc}")
@@ -353,8 +443,8 @@ async def reset_leaderboard():
                 color=discord.Color.blue()
             ))
             study_times.clear()
-            pomodoro_times.clear()
-        reset_time = now_utc + timedelta(weeks=1)
+            work_times.clear()
+        reset_time = now_utc + timedelta(weeks=1)  # Reset every week at Monday 00:00 UTC
 
 @tasks.loop(minutes=1)
 async def show_leaderboard_automatically():
@@ -371,7 +461,9 @@ async def show_leaderboard_automatically():
         if channel and channel.permissions_for(channel.guild.me).send_messages:
             await send_leaderboard(channel)
 
-# 4. Motivational Messages Commands
+# 4. Motivational Messages Feature
+channel_ids = [10, 10, 10]  # Just add commas to add another channel for motivation and health reminder
+
 last_motivational_quote = None
 last_health_reminder = None
 
@@ -442,6 +534,48 @@ motivational_quotes = [
     "Everything is going to be okay.. Keep going, you got this you've always have. 🥹"
 ]
 
+@tasks.loop(hours=3) # Adjust interval as needed
+async def motivational_quotes_loop():
+    global last_motivational_quote
+    for channel_id in channel_ids:
+        channel = bot.get_channel(channel_id)
+        if channel:
+            if random.choice([True, False]):
+                new_quote = random.choice(motivational_quotes)
+            else:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get("https://zenquotes.io/api/random") as response:
+                            data = await response.json()
+                            new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
+                except Exception as e:
+                    new_quote = "You are amazing! Keep believing in yourself. 🌟"
+                    print(f"Error fetching quote: {e}")
+
+            while new_quote == last_motivational_quote:
+                new_quote = random.choice(motivational_quotes)
+                
+                if random.choice([True, False]):
+                    new_quote = random.choice(motivational_quotes)
+                else:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get("https://zenquotes.io/api/random") as response:
+                                data = await response.json()
+                                new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
+                    except Exception as e:
+                        new_quote = "You are amazing! Keep believing in yourself. 🌟"  # Fallback quote
+                        print(f"Error fetching quote: {e}")
+
+            last_motivational_quote = new_quote
+
+            embed = discord.Embed(
+                title="Motivational Quote",
+                description=new_quote,
+                color=discord.Color.blue()
+            )
+            await channel.send(embed=embed)
+
 @bot.tree.command(name='motivate', description='Get a motivational message')
 async def motivate_slash(interaction: discord.Interaction):
     global last_motivational_quote
@@ -449,13 +583,15 @@ async def motivate_slash(interaction: discord.Interaction):
         new_quote = random.choice(motivational_quotes)
     else:
         try:
-            response = requests.get("https://zenquotes.io/api/random")
-            data = response.json()
-            new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
+            async with aiohttp.ClientSession() as session:
+                async with session.get("https://zenquotes.io/api/random") as response:
+                    data = await response.json()
+                    new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
         except Exception as e:
             new_quote = "You are amazing! Keep believing in yourself. 🌟"
             print(f"Error fetching quote: {e}")
 
+    # Ensure the new quote is different from the last one
     while new_quote == last_motivational_quote:
         new_quote = random.choice(motivational_quotes)
         
@@ -463,26 +599,25 @@ async def motivate_slash(interaction: discord.Interaction):
             new_quote = random.choice(motivational_quotes)
         else:
             try:
-                response = requests.get("https://zenquotes.io/api/random")
-                data = response.json()
-                new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get("https://zenquotes.io/api/random") as response:
+                        data = await response.json()
+                        new_quote = data[0]['q'] + " -" + data[0]['a'] + " ✨"
             except Exception as e:
-                new_quote = "You are amazing! Keep believing in yourself. 🌟"
+                new_quote = "You are amazing! Keep believing in yourself. 🌟"  # Fallback quote
                 print(f"Error fetching quote: {e}")
 
     last_motivational_quote = new_quote
 
     embed = discord.Embed(
-        title="Motivational Quote",
+        title="Motivational Quote :)",
         description=new_quote,
         color=discord.Color.blue()
     )
     
     await interaction.response.send_message(embed=embed)
 
-# List of channel IDs where reminders should be sent
-channel_ids = [1066983707094810694, 1324671835803095093, 1324672121372413962, 1324672253019029564, 1182250157492944898]  # Just add commas to add another channel
-
+# 5. Health Reminders Feature
 reminders = [
     "Time to drink some water! 💧",
     "Take a deep breath and relax. 🌬️",
@@ -547,7 +682,7 @@ reminders = [
     "Take a mindful sip of water and enjoy its refreshment. 💦"
 ]
 
-@tasks.loop(hours=3)  # Adjust interval as needed
+@tasks.loop(hours=6)  # Adjust interval as needed
 async def health_reminder():
     global last_health_reminder
     for channel_id in channel_ids:
@@ -572,6 +707,7 @@ async def health_reminder_command(interaction: discord.Interaction):
     global last_health_reminder
     new_reminder = random.choice(reminders)
 
+    # Ensure the new reminder is different from the last one
     while new_reminder == last_health_reminder:
         new_reminder = random.choice(reminders)
 
@@ -584,7 +720,58 @@ async def health_reminder_command(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-# 6. Help Command
+# 6. Cat :3
+CATAAS_API_URL = "https://cataas.com/cat"
+CATAAS_GIF_API_URL = "https://cataas.com/cat/gif"
+
+MEOW_FACTS_API_URL = "https://meowfacts.herokuapp.com/"
+
+@bot.tree.command(name='cat', description='Get a random funny cat image or GIF and a cat fact')
+async def cat(interaction: discord.Interaction):
+    """Send a random funny cat image or GIF and a cat fact."""
+    await interaction.response.defer()
+
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(MEOW_FACTS_API_URL) as cat_fact_response:
+                cat_fact_response.raise_for_status()
+                cat_fact_data = await cat_fact_response.json()
+                cat_fact = cat_fact_data["data"][0] + " 🐾🐱"
+                print("Fetched cat fact:", cat_fact)
+            
+            if random.choice([True, False]):
+                async with session.get(CATAAS_API_URL) as cat_media_response:
+                    cat_media_response.raise_for_status()
+                    cat_media_data = await cat_media_response.read()
+                    cat_media_url = CATAAS_API_URL
+                    cat_media_content = BytesIO(cat_media_data)
+                    cat_media_file = discord.File(cat_media_content, filename="cat_image.jpg")
+                    print("Fetched cat image")
+            else:
+                async with session.get(CATAAS_GIF_API_URL) as cat_media_response:
+                    cat_media_response.raise_for_status()
+                    cat_media_data = await cat_media_response.read()
+                    cat_media_url = CATAAS_GIF_API_URL
+                    cat_media_content = BytesIO(cat_media_data)
+                    cat_media_file = discord.File(cat_media_content, filename="cat_gif.gif")
+                    print("Fetched cat GIF")
+                    
+        except aiohttp.ClientError as e:
+            cat_media_url = "https://cataas.com/cat"
+            cat_fact = "Did you know? Cats have five toes on their front paws, but only four on their back paws. 🐾🐱"
+            cat_media_file = None
+            print(f"Error fetching data: {e}")
+
+    embed = discord.Embed(title="🐱 Silly Cats Time :3 🐱", color=discord.Color.blue())
+    embed.add_field(name="A Lil Cat Fun Fact", value=cat_fact, inline=False)
+
+    if cat_media_file:
+        await interaction.followup.send(embed=embed, file=cat_media_file)
+    else:
+        embed.set_image(url=cat_media_url)
+        await interaction.followup.send(embed=embed)
+
+# 7. Help Commands
 @bot.tree.command(name='help', description='Shows available commands')
 async def help_slash(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -598,10 +785,11 @@ async def help_slash(interaction: discord.Interaction):
     embed.add_field(name="/show_tasks", value="Show your current to-do list", inline=False)
     embed.add_field(name="/remove_task [task_number]", value="Remove a task from your to-do list by its number (Use comma to delete multiple tasks)", inline=False)
     embed.add_field(name="/motivate", value="Get a motivational message", inline=False)
-    embed.add_field(name="/health_reminder", value="Receive health reminders every 3 hours (running in the background)", inline=False)
+    embed.add_field(name="/health_reminder", value="Receive health reminders every 30 minutes (running in the background)", inline=False)
     embed.add_field(name="/log_study", value="Check your total Pomodoro study time", inline=False)
     embed.add_field(name="/show_leaderboard", value="Display the weekly study leaderboard", inline=False)
     embed.add_field(name="/mark_tasks_done", value="Mark your tasks as finish (Use comma to mark multiple tasks)", inline=False)
+    embed.add_field(name="/cat", value="Get a random funny cat image or GIF with a cat fact hehehe :)", inline=False)
 
     await interaction.response.send_message(embed=embed)
 
@@ -613,12 +801,10 @@ async def on_ready():
     await bot.tree.sync()
     print(f"Logged in as {bot.user} and slash commands are synced!")
     health_reminder.start()
+    motivational_quotes_loop.start()
     reset_leaderboard.start()
     show_leaderboard_automatically.start()
     print(f'We have logged in as {bot.user}')
-
-# Call keep_alive to start the server
-keep_alive()
 
 # Run the bot
 bot.run(TOKEN)
