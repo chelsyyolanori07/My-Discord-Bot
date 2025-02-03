@@ -446,21 +446,6 @@ async def reset_leaderboard():
             work_times.clear()
         reset_time = now_utc + timedelta(weeks=1)  # Reset every week at Monday 00:00 UTC
 
-@tasks.loop(minutes=1)
-async def show_leaderboard_automatically():
-    """Display the weekly study leaderboard automatically every week at Monday 00:00 UTC."""
-    global bot_start_time
-    if bot_start_time and datetime.now(timezone.utc) - bot_start_time < timedelta(minutes=1):
-        print("Skipping first run of show_leaderboard_automatically")
-        return
-    
-    now = datetime.now(timezone.utc)
-    if now.weekday() == 0 and now.hour == 0:
-        print(f"Generating leaderboard at {now}")
-        channel = bot.get_channel(announcement_channel_id)
-        if channel and channel.permissions_for(channel.guild.me).send_messages:
-            await send_leaderboard(channel)
-
 # 4. Motivational Messages Feature
 channel_ids = [10, 10, 10]  # Just add commas to add another channel for motivation and health reminder
 
@@ -803,7 +788,6 @@ async def on_ready():
     health_reminder.start()
     motivational_quotes_loop.start()
     reset_leaderboard.start()
-    show_leaderboard_automatically.start()
     print(f'We have logged in as {bot.user}')
 
 # Call keep_alive to start the server
