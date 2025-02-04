@@ -46,7 +46,7 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
     if break_minutes <= 0:
         break_minutes = 5  # Default break time
 
-    max_chunk = 14 * 60
+    max_chunk = 14 * 60  # Max 14-minute chunk (840 seconds)
     work_time = work_minutes * 60
     break_time = break_minutes * 60
     bar_length = 20
@@ -81,6 +81,14 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
             return message
         except discord.NotFound:
             print("Error: Message not found. It may have been deleted.")
+            embed = discord.Embed(
+                title="Timer Continues...",
+                description="Timer is still running...",
+                color=discord.Color.blue() if phase == "Work" else discord.Color.green()
+            )
+            embed.set_footer(text="Pomodoro Timer in progress")
+            new_message = await message.channel.send(embed=embed)
+            return new_message
         except discord.Forbidden:
             print("Error: Bot lacks permission to edit messages.")
         except discord.HTTPException as e:
@@ -108,15 +116,31 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
             if remaining_time > 0:
                 new_embed = discord.Embed(
                     title=f"{phase} Timer Continues...",
-                    description="Timer is still running...",
+                    description=f"Continue {phase.lower()}ing for the remaining time.",
                     color=discord.Color.blue() if phase == "Work" else discord.Color.green()
                 )
                 new_embed.set_footer(text="Pomodoro Timer in progress")
-                message = await message.channel.send(embed=new_embed)
-                thread = await interaction.channel.create_thread(
-                    name=f"{interaction.user.display_name}'s {phase} Timer Thread", message=message
-                )
-                message = await thread.send(embed=new_embed)
+
+                if not thread and total_time > max_chunk:
+                    thread_embed = discord.Embed(
+                        title="Timer Continues in Thread",
+                        description=f"To keep things organized, the timer will continue in a new thread. You can follow the updates there. Thank you :)",
+                        color=discord.Color.blue()
+                    )
+                    await interaction.channel.send(embed=thread_embed)
+
+                    thread = await interaction.channel.create_thread(
+                        name=f"{interaction.user.display_name}'s {phase} Timer Thread", message=message
+                    )
+                    if thread:
+                        message = await thread.send(embed=new_embed)
+                    else:
+                        print("Error: Failed to create thread.")
+                else:
+                    if thread:
+                        message = await thread.send(embed=new_embed)
+                    else:
+                        message = await message.channel.send(embed=new_embed)
 
         end_time = int(time.time())
         elapsed_work_time = total_time
@@ -134,10 +158,13 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
 
     embed = discord.Embed(
         title="Work Session Complete",
-        description=f"**Work session complete! You worked for {work_minutes} minutes. It's time for a break.. Don't forget to breathe :)** 🎉",
+        description=f"**Work session complete! You worked for {work_minutes} minutes. It's time for a break. Don't forget to breathe :)** 🎉",
         color=discord.Color.green()
     )
-    await thread.send(embed=embed)
+    if thread:
+        await thread.send(embed=embed)
+    else:
+        await message.channel.send(embed=embed)
 
     break_embed = discord.Embed(
         title="Break Timer",
@@ -145,7 +172,10 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
         color=discord.Color.blue()
     )
     break_embed.set_footer(text="Break Timer in progress")
-    break_message = await thread.send(embed=break_embed)
+    if thread:
+        break_message = await thread.send(embed=break_embed)
+    else:
+        break_message = await message.channel.send(embed=break_embed)
     message, _ = await start_timer(interaction, break_message, break_time, "Break", user_id)
 
     embed = discord.Embed(
@@ -153,7 +183,10 @@ async def pomodoro_slash(interaction: discord.Interaction, work_minutes: int = 2
         description="**You've completed a Pomodoro session! Great job buddy :)** ✅",
         color=discord.Color.green()
     )
-    await thread.send(embed=embed)
+    if thread:
+        await thread.send(embed=embed)
+    else:
+        await message.channel.send(embed=embed)
 
 @bot.tree.command(name='stop_timer', description='Stop the Pomodoro timer if it is running.')
 async def stop_timer(interaction: discord.Interaction):
